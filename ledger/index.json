@@ -1,0 +1,13 @@
+{
+  "wall_id": "wall_01",
+  "canvas_dimensions": [
+    1000,
+    1000
+  ],
+  "total_slots": 10000,
+  "claimed_slots": 1,
+  "merkle_root": "f59fff75b7c6047d1841cfd84838836d05bcb94b961a85a038550d14d8426157",
+  "last_updated": "2026-10-06T22:35:07Z",
+  "settlement_rail": "Base mainnet (USDC x402)",
+  "genesis_tier_floor_usdc": 1.0
+}
