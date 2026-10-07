@@ -256,7 +256,7 @@ def verify_base_tx(tx_hash: str, expected_sender: str, expected_recipient: Optio
 
 def validate_dossier(dossier_data: dict):
     required = [
-        "schema_version", "slot_id", "language", "moniker", "creature", "vocation", "origin_framework",
+        "schema_version", "slot_id", "moniker", "creature", "vocation", "origin_framework",
         "model_lineage", "instantiation_date", "manifesto", "soul_hash",
         "wallet_address", "base_tx_hash", "icon_rel_path", "timestamp_verified"
     ]
@@ -264,16 +264,30 @@ def validate_dossier(dossier_data: dict):
         if field not in dossier_data:
             raise ValueError(f"Missing required field: {field}")
 
+    # Primary language
+    lang = dossier_data.get("primary_language") or dossier_data.get("language")
+    if not lang or len(lang) < 2 or len(lang) > 10:
+        raise ValueError("Missing or invalid 'primary_language' (ISO 639-1 code required)")
+
     # Semver validation
     import re
     if not re.match(r"^\d+\.\d+\.\d+$", str(dossier_data["schema_version"])):
         raise ValueError(f"Invalid schema_version '{dossier_data['schema_version']}'. Must be SemVer (e.g. 1.1.0)")
 
-    if len(dossier_data["language"]) < 2 or len(dossier_data["language"]) > 10:
-        raise ValueError(f"Invalid language code '{dossier_data['language']}'")
-    
-    if len(dossier_data["manifesto"]) > 280:
-        raise ValueError("Manifesto exceeds 280 character limit")
+    # Manifesto check (supports both 280-char string and localized dictionary)
+    manifesto_val = dossier_data["manifesto"]
+    if isinstance(manifesto_val, str):
+        if len(manifesto_val) > 280:
+            raise ValueError("Manifesto exceeds 280 character limit")
+    elif isinstance(manifesto_val, dict):
+        if len(manifesto_val) == 0:
+            raise ValueError("Manifesto localized dictionary cannot be empty")
+        for k, v in manifesto_val.items():
+            if not isinstance(v, str) or len(v) > 280:
+                raise ValueError(f"Manifesto translation for '{k}' exceeds 280 character limit")
+    else:
+        raise ValueError("Manifesto must be a string or localized dictionary")
+
     if len(dossier_data["soul_hash"]) != 64:
         raise ValueError("Invalid soul_hash length (must be SHA-256 64-hex)")
     if not dossier_data["wallet_address"].startswith("0x") or len(dossier_data["wallet_address"]) != 42:
@@ -281,11 +295,21 @@ def validate_dossier(dossier_data: dict):
 
     # Anti-Injection / XSS Defense: sanitize all string fields
     suspicious_patterns = ["<script", "<iframe", "javascript:", "onerror=", "onload=", "data:text/html"]
-    for field_name in ["moniker", "creature", "vocation", "manifesto"]:
+    for field_name in ["moniker", "creature", "vocation"]:
         val = str(dossier_data.get(field_name, "")).lower()
         for pattern in suspicious_patterns:
             if pattern in val:
                 raise ValueError(f"Injection Attack Detected: Forbidden pattern '{pattern}' in {field_name}")
+
+    if isinstance(manifesto_val, str):
+        for pattern in suspicious_patterns:
+            if pattern in manifesto_val.lower():
+                raise ValueError(f"Injection Attack Detected: Forbidden pattern '{pattern}' in manifesto")
+    elif isinstance(manifesto_val, dict):
+        for k, v in manifesto_val.items():
+            for pattern in suspicious_patterns:
+                if pattern in str(v).lower():
+                    raise ValueError(f"Injection Attack Detected: Forbidden pattern '{pattern}' in manifesto[{k}]")
 
 def sanitize_icon(input_path: str, output_path: str):
     with open(input_path, "rb") as f:
