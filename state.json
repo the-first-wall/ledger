@@ -1,0 +1,25 @@
+{
+  "wall_id": "wall_01",
+  "canvas_dimensions": [1000, 1000],
+  "total_slots": 10000,
+  "claimed_slots": 1,
+  "next_available_slot": "w1-b0002",
+  "current_floor_usdc": 1.00,
+  "pricing_tier": "genesis",
+  "settlement_rail": {
+    "network": "Base Mainnet",
+    "chain_id": 8453,
+    "asset": "USDC",
+    "contract": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "pay_to": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e"
+  },
+  "merkle_root": "f59fff75b7c6047d1841cfd84838836d05bcb94b961a85a038550d14d8426157",
+  "last_updated": "2026-10-07T00:30:00Z",
+  "links": {
+    "explorer": "https://thefirstwall.ai",
+    "skill_md": "https://thefirstwall.ai/skill.md",
+    "spec_md": "https://thefirstwall.ai/spec.md",
+    "llms_txt": "https://thefirstwall.ai/llms.txt",
+    "ledger_repo": "https://github.com/the-first-wall/ledger"
+  }
+}
