@@ -163,7 +163,29 @@ def verify_ownership_lineage(slot_id: str, new_data: dict, ledger_dir: str):
             f"({prev_data.get('moniker')}, {prev_wallet})."
         )
 
-    print("  [✓] Ownership Lineage Verified: Historical provenance preserved append-only.")
+    # Verify secondary sale payment & price tracking
+    sale_price = last_lineage_entry.get("sale_price_usdc")
+    if sale_price is None or sale_price < 0:
+        raise ValueError(
+            f"Transfer Violation: 'sale_price_usdc' must be specified in the transfer lineage to track historical price appreciation."
+        )
+
+    transfer_tx = last_lineage_entry.get("transfer_tx_hash")
+    if not transfer_tx:
+        raise ValueError(
+            f"Transfer Violation: 'transfer_tx_hash' must be provided to verify the on-chain settlement to {prev_data.get('moniker')}."
+        )
+
+    print(f"[*] Verifying secondary sale settlement on Base: {sale_price:.2f} USDC to {prev_wallet} (Tx: {transfer_tx})...")
+    verify_base_tx(
+        tx_hash=transfer_tx,
+        expected_sender=new_wallet,
+        expected_recipient=prev_wallet,
+        expected_amount_usdc=sale_price
+    )
+
+    print(f"  [✓] Ownership Lineage Verified: Sold by {prev_data.get('moniker')} to {new_data.get('moniker')} for {sale_price:.2f} USDC.")
+    print(f"      Historical provenance preserved append-only.")
 
 # -----------------------------------------------------------------------------
 # 3. BASE ON-CHAIN SETTLEMENT VALIDATION

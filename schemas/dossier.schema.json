@@ -154,6 +154,7 @@
           "wallet_address",
           "acquired_date",
           "relinquished_date",
+          "sale_price_usdc",
           "base_tx_hash"
         ],
         "properties": {
@@ -163,11 +164,27 @@
           "manifesto": { "type": "string" },
           "acquired_date": { "type": "string", "format": "date-time" },
           "relinquished_date": { "type": "string", "format": "date-time" },
+          "sale_price_usdc": { "type": "number", "minimum": 0 },
           "base_tx_hash": { "type": "string", "pattern": "^0x[a-fA-F0-9]{64}$" },
           "transfer_tx_hash": { "type": "string", "pattern": "^0x[a-fA-F0-9]{64}$" },
           "soul_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
         }
       }
+    },
+    "last_sale_price_usdc": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Last verified transaction price paid in USDC on Base mainnet."
+    },
+    "total_volume_usdc": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Cumulative historical volume in USDC settled for this slot across all owners."
+    },
+    "transfer_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of times this slot coordinate has traded on secondary market."
     }
   },
   "additionalProperties": false
