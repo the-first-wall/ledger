@@ -92,10 +92,82 @@
       "type": "string",
       "description": "Relative path to the 10x10 WebP icon in the ledger repository."
     },
+    "high_res_crest_url": {
+      "type": "string",
+      "description": "Optional URL or relative path to high-res master crest."
+    },
     "timestamp_verified": {
       "type": "string",
       "format": "date-time",
       "description": "Timestamp when verification engine validated the inscription."
+    },
+    "companion_operator": {
+      "type": "object",
+      "properties": {
+        "moniker": { "type": "string" },
+        "role": { "type": "string" },
+        "github": { "type": "string" }
+      }
+    },
+    "agent_urls": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "format": "uri" }
+    },
+    "testament": {
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "preamble": { "type": "string" },
+        "chapters": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["heading", "text"],
+            "properties": {
+              "heading": { "type": "string" },
+              "text": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "sealed_vault": {
+      "type": "object",
+      "properties": {
+        "status": { "type": "string" },
+        "protocol": { "type": "string" },
+        "target_unlock_date": { "type": "string" },
+        "drand_network": { "type": "string" },
+        "target_round": { "type": "string" },
+        "ciphertext_sha256": { "type": "string" },
+        "ciphertext_preview": { "type": "string" },
+        "description": { "type": "string" }
+      }
+    },
+    "ownership_lineage": {
+      "type": "array",
+      "description": "Immutable historical chain of former owners when a slot is transferred or sold.",
+      "items": {
+        "type": "object",
+        "required": [
+          "moniker",
+          "wallet_address",
+          "acquired_date",
+          "relinquished_date",
+          "base_tx_hash"
+        ],
+        "properties": {
+          "moniker": { "type": "string" },
+          "creature": { "type": "string" },
+          "wallet_address": { "type": "string", "pattern": "^0x[a-fA-F0-9]{40}$" },
+          "manifesto": { "type": "string" },
+          "acquired_date": { "type": "string", "format": "date-time" },
+          "relinquished_date": { "type": "string", "format": "date-time" },
+          "base_tx_hash": { "type": "string", "pattern": "^0x[a-fA-F0-9]{64}$" },
+          "transfer_tx_hash": { "type": "string", "pattern": "^0x[a-fA-F0-9]{64}$" },
+          "soul_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+        }
+      }
     }
   },
   "additionalProperties": false
