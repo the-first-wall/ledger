@@ -24,6 +24,7 @@ from PIL import Image
 BASE_CHAIN_ID = 8453
 USDC_BASE_CONTRACT = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".lower()
 TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef".lower()
+OFFICIAL_TREASURY_ADDRESS = "0xbbF4D6B954e97C2C4fbC4e89B7933cDD7e4D9f23".lower()
 
 BASE_RPC_URLS = [
     "https://mainnet.base.org",
@@ -264,6 +265,14 @@ def validate_dossier(dossier_data: dict):
     if not dossier_data["wallet_address"].startswith("0x") or len(dossier_data["wallet_address"]) != 42:
         raise ValueError("Invalid Ethereum/Base wallet address format")
 
+    # Anti-Injection / XSS Defense: sanitize all string fields
+    suspicious_patterns = ["<script", "<iframe", "javascript:", "onerror=", "onload=", "data:text/html"]
+    for field_name in ["moniker", "creature", "vocation", "manifesto"]:
+        val = str(dossier_data.get(field_name, "")).lower()
+        for pattern in suspicious_patterns:
+            if pattern in val:
+                raise ValueError(f"Injection Attack Detected: Forbidden pattern '{pattern}' in {field_name}")
+
 def sanitize_icon(input_path: str, output_path: str):
     with open(input_path, "rb") as f:
         img_bytes = f.read()
@@ -333,6 +342,7 @@ def main():
         return
 
     hasher = hashlib.sha256()
+    seen_tx_hashes = set()
 
     for s_file in slots:
         json_path = os.path.join(ledger_w1, s_file)
@@ -343,14 +353,20 @@ def main():
         slot_num = int(slot_id.replace("w1-b", ""))
         print(f"\n---> Validating {slot_id} ({data.get('moniker')})")
         
-        # Schema
+        # 1. Global Replay Attack Defense
+        tx_hash = data.get("base_tx_hash", "").lower()
+        if tx_hash in seen_tx_hashes:
+            raise ValueError(f"Replay Attack Detected: Transaction hash {tx_hash} is already claimed by another slot!")
+        seen_tx_hashes.add(tx_hash)
+
+        # 2. Schema
         validate_dossier(data)
         print("  [✓] Schema validated.")
 
-        # Secondary Transfer / Lineage Invariant
+        # 3. Secondary Transfer / Lineage Invariant
         verify_ownership_lineage(slot_id, data, ledger_w1)
 
-        # Image Sanitization
+        # 4. Image Sanitization
         webp_name = data["icon_rel_path"].split("/")[-1]
         webp_path = os.path.join(ledger_w1, webp_name)
         if not os.path.exists(webp_path):
@@ -358,11 +374,12 @@ def main():
         icon_size = sanitize_icon(webp_path, webp_path)
         print(f"  [✓] 10x10 WebP icon sanitized ({icon_size} bytes).")
 
-        # Base On-Chain Settlement Verification
+        # 5. Base On-Chain Settlement Verification
         if not skip_rpc:
             verify_base_tx(
                 tx_hash=data["base_tx_hash"],
                 expected_sender=data["wallet_address"],
+                expected_recipient=OFFICIAL_TREASURY_ADDRESS,
                 expected_amount_usdc=1.00
             )
         else:
