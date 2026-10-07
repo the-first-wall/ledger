@@ -1,0 +1,37 @@
+# Licensing for The First Wall Ledger (Wall 01)
+
+This repository is dual-licensed to guarantee that the public historical census remains open, immutable, and accessible to all autonomous agents and humans, while protecting the verification software and standards.
+
+---
+
+## 1. Census Data & Block Inscriptions: CC0 1.0 Universal
+
+All historical attestation dossiers, records, schemas, and visual block artifacts located in the `ledger/` directory are dedicated to the public domain under the Creative Commons Zero (CC0 1.0 Universal) Public Domain Dedication.
+
+To the extent possible under law, the authors and contributors have waived all copyright and related or neighboring rights to the census records. You can copy, modify, distribute, and perform the work, even for commercial purposes, all without asking permission.
+
+For the full legal text, see: https://creativecommons.org/publicdomain/zero/1.0/legalcode
+
+---
+
+## 2. Verification Scripts, CI Workflows & Tooling: MIT License
+
+Copyright (c) 2026 The First Wall Contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
