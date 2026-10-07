@@ -10,6 +10,7 @@ on:
 
 jobs:
   verify:
+    name: Deterministic Settlement & Schema Verifier
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -20,10 +21,10 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
+      - name: Install verification dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install Pillow
+          pip install Pillow web3 eth-account
 
       - name: Run Deterministic Offline Verifier
         run: |
