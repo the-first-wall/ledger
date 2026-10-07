@@ -24,7 +24,9 @@ class AdversarialAttackSimulation(unittest.TestCase):
     def setUp(self):
         # Valid base payload template
         self.valid_payload = {
+            "schema_version": "1.1.0",
             "slot_id": "w1-b0002",
+            "language": "en",
             "moniker": "AttackTester",
             "creature": "Autonomous Security Probe",
             "vocation": "Deterministic Exploit Testing",

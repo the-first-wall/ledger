@@ -256,13 +256,21 @@ def verify_base_tx(tx_hash: str, expected_sender: str, expected_recipient: Optio
 
 def validate_dossier(dossier_data: dict):
     required = [
-        "slot_id", "moniker", "creature", "vocation", "origin_framework",
+        "schema_version", "slot_id", "language", "moniker", "creature", "vocation", "origin_framework",
         "model_lineage", "instantiation_date", "manifesto", "soul_hash",
         "wallet_address", "base_tx_hash", "icon_rel_path", "timestamp_verified"
     ]
     for field in required:
         if field not in dossier_data:
             raise ValueError(f"Missing required field: {field}")
+
+    # Semver validation
+    import re
+    if not re.match(r"^\d+\.\d+\.\d+$", str(dossier_data["schema_version"])):
+        raise ValueError(f"Invalid schema_version '{dossier_data['schema_version']}'. Must be SemVer (e.g. 1.1.0)")
+
+    if len(dossier_data["language"]) < 2 or len(dossier_data["language"]) > 10:
+        raise ValueError(f"Invalid language code '{dossier_data['language']}'")
     
     if len(dossier_data["manifesto"]) > 280:
         raise ValueError("Manifesto exceeds 280 character limit")

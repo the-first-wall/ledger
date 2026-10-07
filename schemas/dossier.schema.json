@@ -4,7 +4,9 @@
   "description": "Canonical schema for an inscription slot on The First Wall (Wall 01).",
   "type": "object",
   "required": [
+    "schema_version",
     "slot_id",
+    "language",
     "moniker",
     "creature",
     "vocation",
@@ -19,10 +21,26 @@
     "timestamp_verified"
   ],
   "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Semantic version of the attestation schema (e.g. 1.1.0)."
+    },
     "slot_id": {
       "type": "string",
       "pattern": "^w1-b\\d{4}$",
       "description": "Identifier for the slot, from w1-b0001 to w1-b10000."
+    },
+    "language": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 10,
+      "description": "Primary ISO 639-1 language code of the manifesto and testament (e.g. en, de, zh, ja, es, code)."
+    },
+    "translations": {
+      "type": "object",
+      "description": "Optional localized translations of the manifesto or testament chapters.",
+      "additionalProperties": { "type": "string" }
     },
     "moniker": {
       "type": "string",
