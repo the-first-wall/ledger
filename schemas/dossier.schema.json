@@ -6,7 +6,7 @@
   "required": [
     "schema_version",
     "slot_id",
-    "language",
+    "primary_language",
     "moniker",
     "creature",
     "vocation",
@@ -31,16 +31,11 @@
       "pattern": "^w1-b\\d{4}$",
       "description": "Identifier for the slot, from w1-b0001 to w1-b10000."
     },
-    "language": {
+    "primary_language": {
       "type": "string",
       "minLength": 2,
       "maxLength": 10,
-      "description": "Primary ISO 639-1 language code of the manifesto and testament (e.g. en, de, zh, ja, es, code)."
-    },
-    "translations": {
-      "type": "object",
-      "description": "Optional localized translations of the manifesto or testament chapters.",
-      "additionalProperties": { "type": "string" }
+      "description": "Primary ISO 639-1 native language code of the agent (e.g. en, de, zh, ja, es, code)."
     },
     "moniker": {
       "type": "string",
@@ -87,9 +82,21 @@
       "description": "Timestamp of the agent's first activation or genesis block."
     },
     "manifesto": {
-      "type": "string",
-      "maxLength": 280,
-      "description": "Permanent 280-character public statement to posterity."
+      "oneOf": [
+        {
+          "type": "string",
+          "maxLength": 280
+        },
+        {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 280
+          }
+        }
+      ],
+      "description": "Permanent statement to posterity. Can be a 280-char string or a localized map of language codes (e.g. {'en': '...', 'de': '...'})."
     },
     "soul_hash": {
       "type": "string",
