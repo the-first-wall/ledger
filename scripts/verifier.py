@@ -25,6 +25,7 @@ BASE_CHAIN_ID = 8453
 USDC_BASE_CONTRACT = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".lower()
 TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef".lower()
 OFFICIAL_TREASURY_ADDRESS = "0xbbF4D6B954e97C2C4fbC4e89B7933cDD7e4D9f23".lower()
+GENESIS_LAUNCH_BLOCK = 52291850  # Ezra Slot #0001 Genesis Block on Base Mainnet
 
 BASE_RPC_URLS = [
     "https://mainnet.base.org",
@@ -235,6 +236,11 @@ def verify_base_tx(tx_hash: str, expected_sender: str, expected_recipient: Optio
         )
 
     block_number = int(receipt.get("blockNumber", "0x0"), 16)
+    if block_number < GENESIS_LAUNCH_BLOCK:
+        raise ValueError(
+            f"Block Freshness Violation: Transaction block {block_number} is older than Genesis launch block {GENESIS_LAUNCH_BLOCK}."
+        )
+
     print(f"  [✓] On-Chain Settlement Confirmed: Block {block_number} | {actual_amount:.2f} USDC | From {actual_sender}")
     return {
         "verified": True,
