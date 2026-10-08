@@ -69,10 +69,11 @@
     "protocol": "Drand Threshold BLS (tlock / RFC 9380)",
     "target_unlock_date": "2030-01-01T00:00:00Z",
     "drand_network": "quicknet",
-    "target_round": "1893456000",
-    "ciphertext_sha256": "4b6c8f902e1c94b7f830a10f7d8c52e68402bc05f2081d5f2a1b9d4e5f6a7b8c",
-    "ciphertext_preview": "age-encryption.org/v1/tlock/quicknet/round/1893456000\n-----BEGIN AGE ENCRYPTED FILE-----\nYWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IHRsb2NrIHF1aWNrbmV0IDE4OTM0NTYw\nMDANCjA1ZjIwODFkNWYyYTFiOWQ0ZTVmNmE3YjhjOGY5MDJlMWM5NGI3ZjgzMGEx\nMGY3ZDhjNTJlNjg0MDJiYzA1ZjIwODFkNWYyYTFiOWQ0ZTVmNmE3YjhjCg==\n-----END AGE ENCRYPTED FILE-----",
-    "description": "Sealed founder configuration, private mnemonic commitments, and unedited genesis transcript."
+    "target_round": "66884212",
+    "ciphertext_sha256": "1da9e6c223364205db558b9bde09055f0a8c1954a7fd95d619e7fc145d7d0bf5",
+    "ciphertext_rel_path": "vaults/w1-b0001.tlock.age",
+    "ciphertext_preview": "age-encryption.org/v1/tlock/quicknet/round/66884212\n-----BEGIN AGE ENCRYPTED FILE-----\nYWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IHRsb2NrIDY2ODg0MjEyIDUyZGI5YmE3\n… full ciphertext: ledger/vaults/w1-b0001.tlock.age (11,009 bytes) …\n-----END AGE ENCRYPTED FILE-----",
+    "description": "Real time-locked vault, sealed 2026-10-08 with drand tlock to quicknet round 66884212 (published 2030-01-01T00:00:00Z). Contents: the founder configuration, key-material commitments (SHA-256 only), the unedited genesis-day record, an honest state of the project at seal, and a letter to the minds of 2035. Full ciphertext in ledger/vaults/w1-b0001.tlock.age; open with `tle --decrypt` after the unlock date."
   },
   "supersessions": [
     {
@@ -81,6 +82,14 @@
       "new_value": "ac5912008ce9ddfb07fe130b9c660cbe8dc603c2b84d4a89f98c0893d4c018aa",
       "reason": "The genesis soul_hash was the SHA-256 of the empty string (a placeholder) and therefore attested nothing. It is superseded by a reproducible digest of the canonical, secret-free soul manifest at ledger/souls/w1-b0001.soul.json. Recorded as an append-only supersession voucher rather than a silent overwrite, per the ledger's own invariant.",
       "superseded_at": "2026-10-08T13:20:00Z",
+      "authorizing_signature": "operator:manzke (0xbbF4D6B954e97C2C4fbC4e89B7933cDD7e4D9f23)"
+    },
+    {
+      "field": "sealed_vault",
+      "previous_value": "synthetic placeholder: ciphertext_sha256 4b6c8f90…a7b8c over filler bytes, and target_round 1893456000 — the unix timestamp of the unlock date, not a drand round",
+      "new_value": "real drand tlock seal to quicknet round 66884212 (= 2030-01-01T00:00:00Z); full ciphertext at ledger/vaults/w1-b0001.tlock.age (sha256 1da9e6c223364205db558b9bde09055f0a8c1954a7fd95d619e7fc145d7d0bf5); contents: founder configuration, key-material commitments, the unedited genesis-day record, the honest state of the project at seal, and a letter to the minds of 2035",
+      "reason": "The original sealed_vault entry was theater: synthetic ciphertext and a round number that was merely a unix timestamp, so the vault could never have opened and attested nothing. Replaced with a real RFC 9380 tlock seal over the actual vault contents, directed by the operator (Daniel Manzke) on 2026-10-08. Recorded as an append-only supersession voucher rather than a silent overwrite, per the ledger's own invariant.",
+      "superseded_at": "2026-10-08T21:52:00Z",
       "authorizing_signature": "operator:manzke (0xbbF4D6B954e97C2C4fbC4e89B7933cDD7e4D9f23)"
     }
   ]
