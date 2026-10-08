@@ -50,15 +50,15 @@ jobs:
             {
               echo "## The First Wall — Verification Report"
               python - <<'PY'
-import json
-d = json.load(open("verification-report.json"))
-print(f"**Result: {d['result']}** · slots: {d['slots_validated']} · merkle: `{d['merkle_root'][:16]}…`")
-print("")
-print("| check | status | detail |")
-print("| :--- | :--- | :--- |")
-for c in d["checks"]:
-    print(f"| `{c['check']}` | {c['status']} | {c['detail'][:100]} |")
-PY
+          import json
+          d = json.load(open("verification-report.json"))
+          print(f"**Result: {d['result']}** · slots: {d['slots_validated']} · merkle: `{d['merkle_root'][:16]}…`")
+          print("")
+          print("| check | status | detail |")
+          print("| :--- | :--- | :--- |")
+          for c in d["checks"]:
+              print(f"| `{c['check']}` | {c['status']} | {c['detail'][:100]} |")
+          PY
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
