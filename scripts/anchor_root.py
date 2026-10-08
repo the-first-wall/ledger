@@ -177,8 +177,12 @@ def do_send(state: Dict[str, Any], key: str, wait: bool) -> int:
             receipt = rpc("eth_getTransactionReceipt", [tx_hash])
             if receipt and receipt.get("status") == "0x1":
                 block_number = int(receipt["blockNumber"], 16)
+                # A lagging/None block response must never crash us *before* the
+                # anchor record is written (a lost record risks re-broadcasting
+                # the same root on the next run). Fall back to an empty timestamp.
                 blk = rpc("eth_getBlockByNumber", [hex(block_number), False])
-                anchored_at = _ts_to_iso(int(blk["timestamp"], 16))
+                if blk and blk.get("timestamp"):
+                    anchored_at = _ts_to_iso(int(blk["timestamp"], 16))
                 break
             if receipt and receipt.get("status") == "0x0":
                 print("[✗] Anchor transaction reverted on Base.", file=sys.stderr)

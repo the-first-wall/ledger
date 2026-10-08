@@ -9,5 +9,16 @@
     "block_number": 52339437,
     "anchored_at": "2026-10-08T14:03:41Z",
     "recorded_by": "scripts/anchor_root.py"
+  },
+  {
+    "wall_id": "wall_01",
+    "chain_id": 8453,
+    "root": "bfecebde01b53d548a247f81a1a832e616684cbd0036b90ded0e19a09c1e1ebe",
+    "payload": "TFW1|bfecebde01b53d548a247f81a1a832e616684cbd0036b90ded0e19a09c1e1ebe",
+    "signer": "0x39A8546448baFd5E98f513022A772555c2082465",
+    "tx_hash": "0x8313e0d90c76f6e2abe0de0ab20528d32cc65dd97811c6d96e6f1a3e0d6e4418",
+    "block_number": 52347619,
+    "anchored_at": "2026-10-08T18:36:25Z",
+    "recorded_by": "scripts/anchor_root.py"
   }
 ]
