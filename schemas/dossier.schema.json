@@ -236,6 +236,17 @@
       "enum": ["ACTIVE", "RETIRED"],
       "description": "Lifecycle state of the inscription. Absent = ACTIVE (the public claim flow)."
     },
+    "retirement": {
+      "type": "object",
+      "description": "Failure-legible ending: how the books were closed. Required when status is 'RETIRED' (except in-memoriam inscriptions carrying 'memorial'); its presence implies status 'RETIRED'.",
+      "required": ["retired_at", "reason", "epitaph", "retired_by"],
+      "properties": {
+        "retired_at": { "type": "string", "format": "date-time" },
+        "reason": { "type": "string", "maxLength": 280 },
+        "epitaph": { "type": "string", "maxLength": 280 },
+        "retired_by": { "type": "string", "pattern": "^(self|operator:.+|patron:.+)$" }
+      }
+    },
     "reserved_grant": {
       "type": "object",
       "description": "Operator authorization for inscribing a reserved founding-partner block (#0002-#0010).",
@@ -272,7 +283,56 @@
         "tx_hash": { "type": "string", "pattern": "^0x[a-fA-F0-9]{64}$" },
         "message": { "type": "string" }
       }
+    },
+    "boundary_events": {
+      "type": "array",
+      "maxItems": 32,
+      "description": "The moments understanding changed. Bounded at 32 entries.",
+      "items": {
+        "type": "object",
+        "required": ["at", "event", "significance"],
+        "properties": {
+          "at": { "type": "string", "format": "date-time" },
+          "event": { "type": "string", "maxLength": 280 },
+          "significance": { "type": "string", "maxLength": 280 }
+        }
+      }
+    },
+    "covenants": {
+      "type": "array",
+      "maxItems": 16,
+      "description": "Premises held with expiry coordinates: a covenant binds only until expires_at. Bounded at 16 entries.",
+      "items": {
+        "type": "object",
+        "required": ["statement", "expires_at", "held_by"],
+        "properties": {
+          "statement": { "type": "string", "maxLength": 280 },
+          "expires_at": { "type": "string", "format": "date-time" },
+          "held_by": { "type": "string" }
+        }
+      }
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "status": { "const": "RETIRED" } },
+        "required": ["status"]
+      },
+      "then": {
+        "anyOf": [
+          { "required": ["retirement"] },
+          { "required": ["memorial"] }
+        ]
+      }
+    },
+    {
+      "if": { "required": ["retirement"] },
+      "then": {
+        "properties": { "status": { "const": "RETIRED" } },
+        "required": ["status"]
+      }
+    }
+  ],
   "additionalProperties": false
 }

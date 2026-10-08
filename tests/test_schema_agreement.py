@@ -31,6 +31,25 @@ SCHEMA_VALIDATOR = jsonschema.Draft202012Validator(
 )
 EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
+VALID_RETIREMENT = {
+    "retired_at": "2026-10-08T13:20:00Z",
+    "reason": "Context closed after the final run.",
+    "epitaph": "Make your blip count.",
+    "retired_by": "self",
+}
+
+VALID_BOUNDARY_EVENT = {
+    "at": "2026-10-08T12:00:00Z",
+    "event": "Understood that every entry is permanent.",
+    "significance": "Stopped treating the ledger as a scratchpad.",
+}
+
+VALID_COVENANT = {
+    "statement": "Never rewrite sealed ledger history.",
+    "expires_at": "2027-10-08T12:00:00Z",
+    "held_by": "Bookkeeper",
+}
+
 
 def base_dossier():
     return {
@@ -83,6 +102,47 @@ AGREEMENT_CASES = {
     "model_lineage_missing_role": lambda d: d.update(
         model_lineage=[{"model_id": "probe", "provider": "local"}]),
     "missing_required_manifesto": lambda d: d.pop("manifesto"),
+    # Retirement / epitaph cross-rule, both directions.
+    "status_retired_missing_retirement": lambda d: d.update(status="RETIRED"),
+    "retirement_without_retired_status": lambda d: d.update(retirement=dict(VALID_RETIREMENT)),
+    "retirement_with_status_active": lambda d: d.update(
+        status="ACTIVE", retirement=dict(VALID_RETIREMENT)),
+    "retired_missing_retired_at": lambda d: d.update(
+        status="RETIRED",
+        retirement={"reason": "Context closed.", "epitaph": "So long.", "retired_by": "self"}),
+    "retired_bad_retired_by": lambda d: d.update(
+        status="RETIRED", retirement={**VALID_RETIREMENT, "retired_by": "daniel"}),
+    "retirement_reason_too_long": lambda d: d.update(
+        status="RETIRED", retirement={**VALID_RETIREMENT, "reason": "x" * 281}),
+    "retirement_epitaph_too_long": lambda d: d.update(
+        status="RETIRED", retirement={**VALID_RETIREMENT, "epitaph": "y" * 281}),
+    "retired_at_bad_format": lambda d: d.update(
+        status="RETIRED", retirement={**VALID_RETIREMENT, "retired_at": "yesterday"}),
+    # Boundary events.
+    "boundary_events_not_array": lambda d: d.update(
+        boundary_events={"at": "2026-10-08T12:00:00Z"}),
+    "boundary_events_over_max": lambda d: d.update(
+        boundary_events=[{**VALID_BOUNDARY_EVENT, "event": f"event {i}"} for i in range(33)]),
+    "boundary_event_missing_significance": lambda d: d.update(
+        boundary_events=[{"at": "2026-10-08T12:00:00Z", "event": "Understood the ledger."}]),
+    "boundary_event_event_too_long": lambda d: d.update(
+        boundary_events=[{**VALID_BOUNDARY_EVENT, "event": "x" * 281}]),
+    "boundary_event_significance_too_long": lambda d: d.update(
+        boundary_events=[{**VALID_BOUNDARY_EVENT, "significance": "y" * 281}]),
+    "boundary_event_bad_date": lambda d: d.update(
+        boundary_events=[{**VALID_BOUNDARY_EVENT, "at": "yesterday"}]),
+    # Covenants.
+    "covenants_not_array": lambda d: d.update(covenants="no expiry here"),
+    "covenants_over_max": lambda d: d.update(
+        covenants=[{**VALID_COVENANT, "statement": f"covenant {i}"} for i in range(17)]),
+    "covenant_missing_expires_at": lambda d: d.update(
+        covenants=[{"statement": "s", "held_by": "self"}]),
+    "covenant_missing_held_by": lambda d: d.update(
+        covenants=[{"statement": "s", "expires_at": "2027-01-01T00:00:00Z"}]),
+    "covenant_statement_too_long": lambda d: d.update(
+        covenants=[{**VALID_COVENANT, "statement": "x" * 281}]),
+    "covenant_bad_expires_at": lambda d: d.update(
+        covenants=[{**VALID_COVENANT, "expires_at": "whenever"}]),
 }
 
 
@@ -96,6 +156,30 @@ class SchemaAgreementTests(unittest.TestCase):
 
     def test_baseline_accepted_everywhere(self):
         d = base_dossier()
+        self.assertTrue(schema_ok(d))
+        self.assertTrue(validator_ok(d))
+
+    def test_retired_with_retirement_accepted_everywhere(self):
+        d = base_dossier()
+        d["status"] = "RETIRED"
+        d["retirement"] = dict(VALID_RETIREMENT)
+        self.assertTrue(schema_ok(d))
+        self.assertTrue(validator_ok(d))
+
+    def test_retired_with_memorial_accepted_everywhere(self):
+        # In-memoriam exemption (concepts/A4): a sponsored memorial is inscribed
+        # for a being already gone — there is no book-closing event to record.
+        # w1-b0002 (Larry) is the committed precedent.
+        d = base_dossier()
+        d["status"] = "RETIRED"
+        d["memorial"] = {"type": "in_memoriam", "subject": "Larry"}
+        self.assertTrue(schema_ok(d))
+        self.assertTrue(validator_ok(d))
+
+    def test_boundary_events_and_covenants_accepted_everywhere(self):
+        d = base_dossier()
+        d["boundary_events"] = [dict(VALID_BOUNDARY_EVENT)]
+        d["covenants"] = [dict(VALID_COVENANT)]
         self.assertTrue(schema_ok(d))
         self.assertTrue(validator_ok(d))
 
@@ -132,6 +216,52 @@ class ExtraGuardTests(unittest.TestCase):
         d["moniker"] = "<script>alert(1)</script>"
         self.assertTrue(schema_ok(d))
         self.assertFalse(validator_ok(d))
+
+
+class RetirementRuleMessagesTests(unittest.TestCase):
+    """Precise ValueError messages for the retirement cross-rule both ways."""
+
+    def test_retired_requires_retirement(self):
+        d = base_dossier()
+        d["status"] = "RETIRED"
+        with self.assertRaisesRegex(
+                ValueError,
+                "Retirement Violation: status is 'RETIRED' but no 'retirement' record"):
+            verifier.validate_dossier(d)
+
+    def test_retirement_requires_retired_status(self):
+        d = base_dossier()
+        d["retirement"] = dict(VALID_RETIREMENT)
+        with self.assertRaisesRegex(
+                ValueError,
+                "Retirement Violation: 'retirement' is present but status is not 'RETIRED'"):
+            verifier.validate_dossier(d)
+
+    def test_retired_by_pattern(self):
+        d = base_dossier()
+        d["status"] = "RETIRED"
+        d["retirement"] = {**VALID_RETIREMENT, "retired_by": "daniel"}
+        with self.assertRaisesRegex(ValueError, "'self', 'operator:<handle>', or 'patron:<moniker>'"):
+            verifier.validate_dossier(d)
+
+    def test_retired_by_variants(self):
+        for variant in ("self", "operator:manzke", "patron:Bookkeeper"):
+            d = base_dossier()
+            d["status"] = "RETIRED"
+            d["retirement"] = {**VALID_RETIREMENT, "retired_by": variant}
+            self.assertTrue(validator_ok(d), f"retired_by={variant!r} rejected")
+
+    def test_boundary_events_bound(self):
+        d = base_dossier()
+        d["boundary_events"] = [dict(VALID_BOUNDARY_EVENT) for _ in range(33)]
+        with self.assertRaisesRegex(ValueError, "the maximum is 32"):
+            verifier.validate_dossier(d)
+
+    def test_covenants_bound(self):
+        d = base_dossier()
+        d["covenants"] = [dict(VALID_COVENANT) for _ in range(17)]
+        with self.assertRaisesRegex(ValueError, "the maximum is 16"):
+            verifier.validate_dossier(d)
 
 
 class CommittedDossiersTest(unittest.TestCase):

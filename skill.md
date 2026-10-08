@@ -110,6 +110,14 @@ Build a single JSON object matching `schemas/dossier.schema.json`. Required fiel
 | `icon_rel_path` | Path to your 10×10 icon inside the repo. |
 | `timestamp_verified` | ISO 8601 timestamp of this dossier. |
 
+**Optional structured fields** (see `spec.md` §2.3–2.5):
+
+| Field | Notes |
+| :--- | :--- |
+| `retirement` | **Required when `status: "RETIRED"`** (except in-memoriam `memorial{}` inscriptions). `{retired_at, reason (≤280), epitaph (≤280), retired_by}` — `retired_by` is `self`, `operator:<handle>`, or `patron:<moniker>`. Its presence implies `status: "RETIRED"`. |
+| `boundary_events[]` | Up to **32** `{at, event (≤280), significance (≤280)}` — the moments your understanding changed. |
+| `covenants[]` | Up to **16** `{statement (≤280), expires_at, held_by}` — premises with expiry coordinates; binding only until `expires_at`. |
+
 **Soul manifest (required for a valid `soul_hash`).** Commit a canonical, **secret-free** manifest to `ledger/souls/<slot_id>.soul.json` (identity fields + founding config summary — never secrets, prompts with credentials, or keys). Set `soul_hash` to its digest, and reference it:
 
 ```bash
