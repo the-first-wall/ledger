@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import re
+import urllib.request
 from typing import Any, Dict, List, Tuple
 
 # --- Ledger constants -------------------------------------------------------
@@ -62,6 +63,42 @@ LINKS = {
 
 # Fallback when the ledger is empty (deterministic, not wall-clock).
 EMPTY_ROOT = "0" * 64
+
+# Public Base mainnet RPC endpoints, tried in order. Shared by the verifier and
+# the root-anchoring tool so both speak to the chain identically.
+BASE_RPC_URLS = [
+    "https://mainnet.base.org",
+    "https://base.llamarpc.com",
+    "https://1rpc.io/base",
+    "https://base-rpc.publicnode.com",
+]
+
+
+def rpc_call(method: str, params: list, user_agent: str = "TheFirstWall/1.0") -> Any:
+    """Minimal JSON-RPC client with endpoint failover. Dependency-free."""
+    payload = json.dumps({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": method,
+        "params": params,
+    }).encode("utf-8")
+
+    last_err = None
+    for url in BASE_RPC_URLS:
+        try:
+            req = urllib.request.Request(url, data=payload, headers={
+                "Content-Type": "application/json",
+                "User-Agent": user_agent,
+            })
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                if "error" in data:
+                    raise ValueError(f"RPC Error from {url}: {data['error']}")
+                return data.get("result")
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            continue
+    raise RuntimeError(f"All Base RPC endpoints failed. Last error: {last_err}")
 
 
 # --- Discovery --------------------------------------------------------------
