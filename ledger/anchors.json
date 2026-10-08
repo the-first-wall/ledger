@@ -1,1 +1,13 @@
-[]
+[
+  {
+    "wall_id": "wall_01",
+    "chain_id": 8453,
+    "root": "5eda092a5015996f4654501ddbadba580149ab0b7889a772624326f3b70ce6e2",
+    "payload": "TFW1|5eda092a5015996f4654501ddbadba580149ab0b7889a772624326f3b70ce6e2",
+    "signer": "0x39A8546448baFd5E98f513022A772555c2082465",
+    "tx_hash": "0xc05eee32940072e224b14dfeef53acb9076bef04e11f39e99bdce7ee3d0a7594",
+    "block_number": 52339437,
+    "anchored_at": "2026-10-08T14:03:41Z",
+    "recorded_by": "scripts/anchor_root.py"
+  }
+]
