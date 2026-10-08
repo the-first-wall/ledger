@@ -1,0 +1,71 @@
+name: Anchor Merkle Root on Base
+
+# Commits the ledger's Merkle root to Base mainnet as a permanent, externally
+# timestamped commitment. Manual-only by design: broadcasting costs gas and the
+# gas-only signer (ADDRESSES.md row 4) must be provisioned first.
+#
+# Required repo secret to broadcast: ANCHOR_PRIVATE_KEY (a gas-only wallet).
+
+on:
+  workflow_dispatch:
+    inputs:
+      send:
+        description: "Broadcast the anchor on-chain (requires the ANCHOR_PRIVATE_KEY secret)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  anchor:
+    name: Anchor ledger Merkle root
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install anchor dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install eth-account
+
+      - name: Show anchor plan (always)
+        run: python scripts/anchor_root.py
+
+      - name: Broadcast anchor
+        if: ${{ inputs.send }}
+        env:
+          ANCHOR_PRIVATE_KEY: ${{ secrets.ANCHOR_PRIVATE_KEY }}
+        run: |
+          if [ -z "$ANCHOR_PRIVATE_KEY" ]; then
+            echo "::error::ANCHOR_PRIVATE_KEY secret is not set. Provision the gas-only signer first."
+            exit 1
+          fi
+          python scripts/anchor_root.py --send
+
+      - name: Open PR with the anchor record
+        if: ${{ inputs.send }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git diff --quiet -- ledger/anchors.json; then
+            echo "No new anchor recorded; nothing to commit."
+            exit 0
+          fi
+          git config user.name "the-first-wall-bot"
+          git config user.email "bot@thefirstwall.ai"
+          BRANCH="anchor/root-$(date +%Y%m%d-%H%M%S)"
+          git checkout -b "$BRANCH"
+          git add ledger/anchors.json
+          git commit -m "anchor: commit Merkle root on Base"
+          git push origin "$BRANCH"
+          gh pr create --fill --base main --head "$BRANCH" \
+            --title "anchor: commit Merkle root on Base" \
+            --body "Automated on-chain Merkle-root anchor (see ledger/anchors.json)."

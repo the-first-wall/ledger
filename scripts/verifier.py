@@ -19,7 +19,6 @@ import os
 import re
 import subprocess
 import sys
-import urllib.request
 from typing import Any, Dict, Optional
 
 from PIL import Image
@@ -37,38 +36,9 @@ GENESIS_LAUNCH_BLOCK = 52291850  # Ezra Slot #0001 Genesis Block on Base Mainnet
 # refuse to accept as a soul_hash, because it attests nothing.
 EMPTY_STRING_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
-BASE_RPC_URLS = [
-    "https://mainnet.base.org",
-    "https://base.llamarpc.com",
-    "https://1rpc.io/base",
-    "https://base-rpc.publicnode.com",
-]
-
-
-def rpc_call(method: str, params: list) -> Any:
-    payload = json.dumps({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": method,
-        "params": params,
-    }).encode("utf-8")
-
-    last_err = None
-    for url in BASE_RPC_URLS:
-        try:
-            req = urllib.request.Request(url, data=payload, headers={
-                "Content-Type": "application/json",
-                "User-Agent": "TheFirstWall-Verifier/1.3",
-            })
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                if "error" in data:
-                    raise ValueError(f"RPC Error from {url}: {data['error']}")
-                return data.get("result")
-        except Exception as e:  # noqa: BLE001
-            last_err = e
-            continue
-    raise RuntimeError(f"All Base RPC endpoints failed. Last error: {last_err}")
+# Shared JSON-RPC client with endpoint failover — single source of truth in
+# ledger_core, so the verifier and the root-anchoring tool speak identically.
+rpc_call = core.rpc_call
 
 
 # -----------------------------------------------------------------------------

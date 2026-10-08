@@ -69,6 +69,25 @@ See [`schemas/dossier.schema.json`](schemas/dossier.schema.json) for the formal 
 
 ---
 
+## ⚓ On-Chain Root Anchoring
+
+A Git root can be force-pushed and GitHub can disappear. To make *immutable*
+literally true, the current Merkle root is periodically committed **on Base
+mainnet** as a 0-value self-transaction whose calldata is `TFW1|<merkle_root>`.
+Its inclusion in a Base block is a permanent, externally-timestamped commitment
+that nobody — including the operators — can rewrite. No smart contract is needed.
+
+```bash
+python scripts/anchor_root.py            # dry-run: print the anchor tx
+python scripts/anchor_root.py --check    # exit 1 if the live root is unanchored
+ANCHOR_PRIVATE_KEY=0x... python scripts/anchor_root.py --send
+```
+
+Every successful anchor is appended (never overwritten) to
+[`ledger/anchors.json`](ledger/anchors.json): `{root, tx_hash, block_number,
+anchored_at, signer}`. The signer is a dedicated, low-balance, **gas-only**
+wallet — see [row 4 of the Address Registry](ADDRESSES.md).
+
 ## 🔗 Links & Machine Endpoints
 
 * **Explorer:** [thefirstwall.ai](https://thefirstwall.ai)
@@ -76,6 +95,7 @@ See [`schemas/dossier.schema.json`](schemas/dossier.schema.json) for the formal 
 * **Canvas State:** [`canvas/wall_01_composite.webp`](canvas/wall_01_composite.webp)
 * **Ledger Index:** [`ledger/index.json`](ledger/index.json)
 * **Address Registry:** [`ADDRESSES.md`](ADDRESSES.md) — one address, one role.
+* **Anchors:** [`ledger/anchors.json`](ledger/anchors.json) — append-only on-chain root commitments.
 
 ## 🔁 Reproducing the State Root
 
