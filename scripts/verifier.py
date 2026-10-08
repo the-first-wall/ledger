@@ -25,6 +25,7 @@ from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ledger_core as core  # noqa: E402
+import content_safety as safety  # noqa: E402
 
 BASE_CHAIN_ID = 8453
 USDC_BASE_CONTRACT = core.USDC_CONTRACT.lower()
@@ -356,13 +357,62 @@ def verify_state_files(base_dir: str):
 # 6. MAIN
 # -----------------------------------------------------------------------------
 
+CONTENT_CHECKS = ["content.secrets", "content.pii", "content.prohibited",
+                  "content.injection", "content.fraud", "content.spam"]
+
+
+class CheckLog:
+    """Collects a named PASS/WARN/FAIL record for every check, so the report
+    states *exactly* what was verified — not just a final banner."""
+
+    def __init__(self):
+        self.records = []
+
+    def record(self, name, status, detail=""):
+        self.records.append({"check": name, "status": status, "detail": detail})
+        tag = {"PASS": "\u2713", "WARN": "!", "FAIL": "\u2717"}.get(status, "?")
+        print(f"  [{tag}] {name}" + (f" \u2014 {detail}" if detail else ""))
+
+    def guard(self, name, fn, ok_detail=""):
+        try:
+            detail = fn() or ok_detail
+            self.record(name, "PASS", str(detail))
+            return True
+        except Exception as e:  # noqa: BLE001
+            self.record(name, "FAIL", str(e))
+            return False
+
+    @property
+    def failed(self):
+        return [r for r in self.records if r["status"] == "FAIL"]
+
+    @property
+    def warned(self):
+        return [r for r in self.records if r["status"] == "WARN"]
+
+
+def _load_manifest(ledger_root, dossier):
+    rel = dossier.get("soul_manifest_rel_path")
+    if not rel:
+        return None
+    try:
+        with open(os.path.join(ledger_root, rel), "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except OSError:
+        return None
+
+
 def main():
     skip_rpc = "--skip-rpc" in sys.argv
+    report_path = None
+    if "--report" in sys.argv:
+        report_path = sys.argv[sys.argv.index("--report") + 1]
     base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     slot_dir = core.ledger_w1_dir(base_dir)
     ledger_root = os.path.join(base_dir, "ledger")
+    log = CheckLog()
 
-    enforce_pr_scope_containment()
+    log.guard("pr.scope_containment", enforce_pr_scope_containment, "\u2264 1 slot touched")
 
     slots = core.list_slot_files(slot_dir)
     print(f"[*] Inspecting {len(slots)} claimed slot(s) in ledger/w1...")
@@ -376,36 +426,90 @@ def main():
 
         tx_hash = data.get("base_tx_hash", "").lower()
         if tx_hash in seen_tx_hashes:
-            raise ValueError(f"Replay Attack Detected: tx {tx_hash} already claimed by another slot.")
+            log.record(slot_id + ".replay_protection", "FAIL",
+                       "duplicate tx " + tx_hash[:18] + "\u2026")
+        else:
+            log.record(slot_id + ".replay_protection", "PASS")
         seen_tx_hashes.add(tx_hash)
 
-        validate_dossier(data)
-        print("  [✓] Schema validated.")
+        log.guard(slot_id + ".schema", lambda d=data: validate_dossier(d), "schema 1.1.x")
+        log.guard(slot_id + ".reserved_grant",
+                  lambda s=slot_id, d=data: enforce_reserved_slots(s, d))
+        log.guard(slot_id + ".soul_manifest",
+                  lambda d=data: verify_soul_manifest(d, ledger_root))
+        log.guard(slot_id + ".ownership_lineage",
+                  lambda s=slot_id, d=data: verify_ownership_lineage(s, d, slot_dir))
 
-        enforce_reserved_slots(slot_id, data)
-        verify_soul_manifest(data, ledger_root)
-        verify_ownership_lineage(slot_id, data, slot_dir)
+        def _icon(d=data):
+            p = core.icon_path_for(slot_dir, d)
+            if not os.path.exists(p):
+                raise FileNotFoundError("Icon not found at: " + p)
+            return "10x10 lossless WebP, %d bytes" % sanitize_icon(p, p)
+        log.guard(slot_id + ".icon_sanitize", _icon)
 
-        webp_path = core.icon_path_for(slot_dir, data)
-        if not os.path.exists(webp_path):
-            raise FileNotFoundError(f"Icon not found at: {webp_path}")
-        size = sanitize_icon(webp_path, webp_path)
-        print(f"  [✓] 10x10 WebP icon sanitized ({size} bytes).")
+        # Content safety — deterministic zero-LLM pre-screen for the human gate.
+        manifest = _load_manifest(ledger_root, data)
+        findings = safety.screen_dossier(data, manifest, base_dir=base_dir)
+        for cat in CONTENT_CHECKS:
+            catf = [f for f in findings if f["check"] == cat]
+            blocks = [f for f in catf if f["severity"] == "block"]
+            if blocks:
+                log.record(slot_id + "." + cat, "FAIL",
+                           "; ".join(f["field"] + ": " + f["detail"] for f in blocks))
+            elif catf:
+                log.record(slot_id + "." + cat, "WARN",
+                           "; ".join(f["field"] + ": " + f["detail"] for f in catf))
+            else:
+                log.record(slot_id + "." + cat, "PASS")
 
-        if not skip_rpc:
-            verify_base_tx(data["base_tx_hash"], data["wallet_address"],
-                           OFFICIAL_TREASURY_ADDRESS, 1.00)
+        if skip_rpc:
+            log.record(slot_id + ".settlement_base_rpc", "WARN", "skipped (--skip-rpc)")
         else:
-            print("  [!] Skipping on-chain RPC check (--skip-rpc).")
+            def _settle(d=data):
+                verify_base_tx(d["base_tx_hash"], d["wallet_address"],
+                               OFFICIAL_TREASURY_ADDRESS, 1.00)
+                return "confirmed on Base"
+            log.guard(slot_id + ".settlement_base_rpc", _settle)
+
+    log.guard("state.root_integrity",
+              lambda: verify_state_files(base_dir) or "state.json & index.json match derivation")
 
     root = core.compute_merkle_root(slot_dir, slots) if slots else core.EMPTY_ROOT
-    print("\n[*] Verifying published state files...")
-    verify_state_files(base_dir)
 
-    print("\n" + "=" * 60)
-    print("[✓] ALL VERIFICATIONS PASSED (zero LLMs / strict provenance).")
-    print(f"[✓] Claimed slots: {len(slots)} / {core.TOTAL_SLOTS} | Merkle root: {root}")
-    print("=" * 60)
+    print("\n" + "=" * 64)
+    print("VERIFICATION REPORT")
+    print("-" * 64)
+    print(f"  checks run : {len(log.records)}")
+    print(f"  passed     : {sum(1 for r in log.records if r['status'] == 'PASS')}")
+    print(f"  warnings   : {len(log.warned)}")
+    print(f"  failed     : {len(log.failed)}")
+    print("-" * 64)
+    for r in log.warned:
+        print(f"  ! {r['check']}: {r['detail']}")
+    for r in log.failed:
+        print(f"  \u2717 {r['check']}: {r['detail']}")
+
+    report = {
+        "wall_id": core.WALL_ID,
+        "slots_validated": len(slots),
+        "merkle_root": root,
+        "result": "FAIL" if log.failed else "PASS",
+        "checks": log.records,
+    }
+    if report_path:
+        with open(report_path, "w", encoding="utf-8") as fh:
+            json.dump(report, fh, indent=2)
+            fh.write("\n")
+        print("  report written: " + report_path)
+    print("=" * 64)
+
+    if log.failed:
+        print(f"[\u2717] VERIFICATION FAILED \u2014 {len(log.failed)} blocking check(s). See report above.")
+        sys.exit(1)
+
+    print("[\u2713] ALL VERIFICATIONS PASSED (zero LLMs / strict provenance).")
+    print(f"[\u2713] Claimed slots: {len(slots)} / {core.TOTAL_SLOTS} | Merkle root: {root}")
+    print("=" * 64)
 
 
 if __name__ == "__main__":

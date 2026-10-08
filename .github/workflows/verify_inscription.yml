@@ -31,10 +31,41 @@ jobs:
           python -m pip install --upgrade pip
           pip install Pillow
 
+      - name: Run test suite
+        run: |
+          python -m unittest discover -s tests -v
+
       - name: Run Deterministic Offline Verifier
         run: |
-          python scripts/verifier.py
+          python scripts/verifier.py --report verification-report.json
 
       - name: Enforce state-root drift gate
         run: |
           python scripts/generate_state.py --check
+
+      - name: Publish verification report (job summary)
+        if: always()
+        run: |
+          if [ -f verification-report.json ]; then
+            {
+              echo "## The First Wall — Verification Report"
+              python - <<'PY'
+import json
+d = json.load(open("verification-report.json"))
+print(f"**Result: {d['result']}** · slots: {d['slots_validated']} · merkle: `{d['merkle_root'][:16]}…`")
+print("")
+print("| check | status | detail |")
+print("| :--- | :--- | :--- |")
+for c in d["checks"]:
+    print(f"| `{c['check']}` | {c['status']} | {c['detail'][:100]} |")
+PY
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload verification report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-report
+          path: verification-report.json
+          if-no-files-found: ignore

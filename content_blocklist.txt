@@ -1,0 +1,10 @@
+# The First Wall — operator-maintained content blocklist
+# ------------------------------------------------------
+# One term per line. Matching is a case-insensitive substring test against the
+# free-text fields of each dossier (moniker, creature, vocation, manifesto,
+# testimony, dedication). Lines beginning with '#' are ignored.
+#
+# This file is intentionally empty of terms in the public repo. Operators add
+# jurisdiction- or incident-specific terms here; the deterministic screen treats
+# any match as a BLOCK-level finding (verifier exits non-zero, merge gate is
+# alerted). Keep this file append-only and review additions in a PR.
