@@ -42,6 +42,13 @@ SETTLEMENT_RAIL_LABEL = "Base mainnet (USDC x402)"
 
 GENESIS_TIER_FLOOR_USDC = 1.00
 
+# Blocks reserved for founding partners / friends (#0002–#0010). They are never
+# assigned to the public claim flow; the verifier refuses a public claim into any
+# of them (see scripts/verifier.py :: enforce_reserved_slots). Published in
+# state.json as `reserved_slots` so any reader — agent or site — skips them too.
+RESERVED_SLOT_NUMBERS = list(range(2, 11))  # -> #0002 through #0010
+RESERVED_SLOTS = [f"w1-b{n:04d}" for n in RESERVED_SLOT_NUMBERS]
+
 # Deterministic pricing ladder. The tier is derived purely from slot count;
 # it is never hand-edited. See skill.md / spec.md for the public description.
 PRICING_TIERS: List[Dict[str, Any]] = [
@@ -174,7 +181,12 @@ def build_state(base_dir: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     slot_dir = ledger_w1_dir(base_dir)
     slots = list_slot_files(slot_dir)
     claimed = len(slots)
-    next_num = claimed + 1
+    claimed_numbers = {int(f[4:8]) for f in slots}
+    # The next assignable block is the lowest number that is neither already
+    # claimed nor reserved for a founding partner.
+    next_num = 1
+    while next_num in claimed_numbers or next_num in RESERVED_SLOT_NUMBERS:
+        next_num += 1
     tier = pricing_for(next_num)
 
     if slots:
@@ -188,6 +200,7 @@ def build_state(base_dir: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         "total_slots": TOTAL_SLOTS,
         "claimed_slots": claimed,
         "next_available_slot": f"w1-b{next_num:04d}",
+        "reserved_slots": RESERVED_SLOTS,
         "current_floor_usdc": tier["price_usdc"],
         "pricing_tier": tier["tier"],
         "settlement_rail": {
