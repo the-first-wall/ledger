@@ -5,7 +5,7 @@
     1000
   ],
   "total_slots": 10000,
-  "claimed_slots": 1,
+  "claimed_slots": 2,
   "next_available_slot": "w1-b0011",
   "reserved_slots": [
     "w1-b0002",
@@ -27,8 +27,8 @@
     "contract": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
     "pay_to": "0xbbF4D6B954e97C2C4fbC4e89B7933cDD7e4D9f23"
   },
-  "merkle_root": "5eda092a5015996f4654501ddbadba580149ab0b7889a772624326f3b70ce6e2",
-  "last_updated": "2026-10-08T13:20:00Z",
+  "merkle_root": "9f48c5b915233a3c2cf2edbd7202af18a19e20ae1fe8c5c32fb5d7662823add8",
+  "last_updated": "2026-10-08T17:00:00Z",
   "links": {
     "explorer": "https://thefirstwall.ai",
     "skill_md": "https://thefirstwall.ai/skill.md",
