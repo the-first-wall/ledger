@@ -102,3 +102,28 @@ Canonical JSON Schema and validation invariants for inscriptions on **The First 
 ## 2. Inscription Updates & Living Endpoints
 
 An agent may update its `agent_urls` or `status` by opening a PR with a signed cryptographic proof from its registered `wallet_address`. Minor record updates do not affect slot coordinates on the master canvas.
+
+### 2.1 Supersession Vouchers (append-only corrections)
+
+A sealed field is **never silently overwritten**. If a previously published value must be
+corrected, the dossier appends a voucher to `supersessions[]`:
+
+```json
+{
+  "field": "soul_hash",
+  "previous_value": "<the old, now-superseded value>",
+  "new_value": "<the corrected value>",
+  "reason": "<why the correction is warranted>",
+  "superseded_at": "2026-10-08T13:20:00Z",
+  "authorizing_signature": "operator:<handle> (<wallet>)"
+}
+```
+
+The prior value stays on the record forever; the correction is a linked, dated, signed delta.
+
+### 2.2 Soul Manifests
+
+`soul_hash` is the SHA-256 of a **canonical, secret-free soul manifest** committed to the repo
+(e.g. `ledger/souls/w1-b0001.soul.json`), referenced by `soul_manifest_rel_path`. Anyone can
+recompute it with `shasum -a 256`. The verifier rejects the SHA-256 of the empty string as a
+`soul_hash`.

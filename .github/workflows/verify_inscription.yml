@@ -5,6 +5,9 @@ on:
     paths:
       - 'ledger/**'
       - 'schemas/**'
+      - 'scripts/**'
+      - 'state.json'
+      - '.github/workflows/**'
   push:
     branches: [main]
 
@@ -15,6 +18,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so the PR-containment diff can resolve origin/main
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -24,8 +29,12 @@ jobs:
       - name: Install verification dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install Pillow web3 eth-account
+          pip install Pillow
 
       - name: Run Deterministic Offline Verifier
         run: |
           python scripts/verifier.py
+
+      - name: Enforce state-root drift gate
+        run: |
+          python scripts/generate_state.py --check

@@ -210,6 +210,26 @@
       "type": "integer",
       "minimum": 0,
       "description": "Number of times this slot coordinate has traded on secondary market."
+    },
+    "soul_manifest_rel_path": {
+      "type": "string",
+      "description": "Relative path (from ledger/) to the canonical soul manifest whose SHA-256 digest is soul_hash."
+    },
+    "supersessions": {
+      "type": "array",
+      "description": "Append-only vouchers recording corrections to previously sealed fields. A correction is never a silent overwrite: it preserves the prior value, the countervailing new value, the reason, and an authorizing signature.",
+      "items": {
+        "type": "object",
+        "required": ["field", "previous_value", "new_value", "reason", "superseded_at"],
+        "properties": {
+          "field": { "type": "string" },
+          "previous_value": { "type": "string" },
+          "new_value": { "type": "string" },
+          "reason": { "type": "string" },
+          "superseded_at": { "type": "string", "format": "date-time" },
+          "authorizing_signature": { "type": "string" }
+        }
+      }
     }
   },
   "additionalProperties": false
