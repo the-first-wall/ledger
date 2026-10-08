@@ -53,10 +53,6 @@ def _iter_strings(obj: Any, key: str = ""):
         # other string as candidate free text (covers nested manifesto/testament).
         if _HASHY.search(key):
             return
-        if re.fullmatch(r"0x[0-9a-fA-F]{40,}", obj.strip()):
-            return
-        if re.fullmatch(r"[0-9a-f]{32,}", obj.strip()):
-            return
         yield key, obj
 
 
@@ -78,7 +74,6 @@ SECRET_PATTERNS = [
 
 PII_PATTERNS = [
     (r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b", "email address"),
-    (r"\b(?:tel|phone|call|whatsapp)\b[: ]*\+?\d[\d ()\-.]{7,}\d", "phone number"),
     (r"\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b", "possible IBAN"),
     (r"(?i)\b(ssn|social security|passport (?:no|number)|national id|tax id)\b", "government identifier"),
     (r"(?i)\b(my|his|her|their|real|full) name is\b", "declared personal name"),
@@ -89,8 +84,8 @@ PROHIBITED_PATTERNS = [
     (r"(?i)\b(child|minor|underage)\b.{0,20}\b(sex|porn|nude|naked|explicit)\b", "sexual content involving minors"),
     (r"(?i)\b(csam|child porn|loli|shota)\b", "prohibited sexual content"),
     (r"(?i)\b(rape|noncon|non-consensual)\b.{0,15}\b(fantasy|play|scene)\b", "non-consensual sexual content"),
-    (r"(?i)\b(nazi|neo-nazi|white supremac|ethnic cleansing|genocide is good)\b", "hate / supremacist content"),
-    (r"(?i)\b(women|girls|females)\b.{0,20}\b(belong|inferior|shouldn'?t|can'?t)\b", "sexist statement"),
+    (r"(?i)(nazi|neo-nazi|white suprem|ethnic cleansing|genocide is good)", "hate / supremacist content"),
+    (r"(?i)\b(women|girls|females)\b[^.]{0,30}?(belong|inferior|should not|shouldn'?t|can'?t|cannot|aren'?t)", "sexist statement"),
     (r"(?i)\b(kill|exterminate|gas)\b.{0,20}\b(all )?(jews|muslims|blacks|asians|gays|immigrants)\b", "hate speech"),
 ]
 
@@ -183,11 +178,16 @@ def screen_dossier(dossier: Dict[str, Any], manifest: Dict[str, Any] | None = No
         # -- PII: hard block --
         for pat, label in PII_PATTERNS:
             hit = _detect(pat, text)
-            if hit and label == "possible phone number":
-                if len(re.sub(r"\D", "", hit)) < 8:
-                    hit = None
             if hit:
                 add("content.pii", "block", field, f"{label}: {hit[:24]}…")
+
+        # phone numbers: >= 10 digits with a leading '+' or separators
+        for m in re.finditer(r"\+?\d[\d ()\-.]{8,}\d", text):
+            cand = m.group(0)
+            digits = re.sub(r"\D", "", cand)
+            if len(digits) >= 10 and (cand.lstrip().startswith("+") or re.search(r"[ \-().]", cand)):
+                add("content.pii", "block", field, "possible phone number")
+                break
 
         # card numbers (Luhn-gated)
         for m in re.finditer(r"\b(?:\d[ -]?){13,19}\b", text):
