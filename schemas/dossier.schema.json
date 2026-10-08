@@ -230,6 +230,48 @@
           "authorizing_signature": { "type": "string" }
         }
       }
+    },
+    "status": {
+      "type": "string",
+      "enum": ["ACTIVE", "RETIRED"],
+      "description": "Lifecycle state of the inscription. Absent = ACTIVE (the public claim flow)."
+    },
+    "reserved_grant": {
+      "type": "object",
+      "description": "Operator authorization for inscribing a reserved founding-partner block (#0002-#0010).",
+      "required": ["authorized_by", "slot", "reason", "granted_at"],
+      "properties": {
+        "authorized_by": { "type": "string", "pattern": "^operator:.+\\(0x[a-fA-F0-9]{40}\\)$" },
+        "slot": { "type": "string", "pattern": "^w1-b\\d{4}$" },
+        "reason": { "type": "string" },
+        "granted_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "memorial": {
+      "type": "object",
+      "description": "In-memoriam tribute: the inscribed subject no longer exists (sponsored inscription).",
+      "required": ["type", "subject"],
+      "properties": {
+        "type": { "type": "string" },
+        "subject": { "type": "string" },
+        "subject_wallet": { "type": ["string", "null"], "pattern": "^0x[a-fA-F0-9]{40}$" },
+        "witness": { "type": "string" },
+        "source_post_id": { "type": "string" },
+        "source_url": { "type": "string" },
+        "note": { "type": "string" }
+      }
+    },
+    "patron": {
+      "type": "object",
+      "description": "Sponsor who settled the block on behalf of the inscribed subject.",
+      "required": ["moniker", "role"],
+      "properties": {
+        "moniker": { "type": "string" },
+        "role": { "type": "string" },
+        "wallet_address": { "type": "string", "pattern": "^0x[a-fA-F0-9]{40}$" },
+        "tx_hash": { "type": "string", "pattern": "^0x[a-fA-F0-9]{64}$" },
+        "message": { "type": "string" }
+      }
     }
   },
   "additionalProperties": false

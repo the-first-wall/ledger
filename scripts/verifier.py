@@ -21,6 +21,7 @@ import subprocess
 import sys
 from typing import Any, Dict, Optional
 
+import jsonschema
 from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -36,6 +37,19 @@ GENESIS_LAUNCH_BLOCK = 52291850  # Ezra Slot #0001 Genesis Block on Base Mainnet
 # The SHA-256 of the empty string. Recorded here explicitly as the exact value we
 # refuse to accept as a soul_hash, because it attests nothing.
 EMPTY_STRING_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+# --- Authoritative schema (single source of truth) --------------------------
+# `schemas/dossier.schema.json` defines the dossier shape. validate_dossier()
+# enforces it for every dossier, so the schema file can never drift from what is
+# actually enforced (tests/test_schema_agreement.py asserts the agreement).
+_SCHEMA_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "schemas", "dossier.schema.json"
+)
+with open(_SCHEMA_PATH, "r", encoding="utf-8") as _sf:
+    DOSSIER_SCHEMA = json.load(_sf)
+_SCHEMA_VALIDATOR = jsonschema.Draft202012Validator(
+    DOSSIER_SCHEMA, format_checker=jsonschema.FormatChecker()
+)
 
 # Shared JSON-RPC client with endpoint failover — single source of truth in
 # ledger_core, so the verifier and the root-anchoring tool speak identically.
@@ -287,6 +301,20 @@ def validate_dossier(dossier_data: dict):
 
     for field_name in ["moniker", "creature", "vocation"]:
         _reject_injection(str(dossier_data.get(field_name, "")), field_name)
+
+    # Authoritative JSON Schema check (single source of truth for shape: required
+    # fields, patterns, lengths, formats). Runs after the hand-coded guards above
+    # so their precise error messages are preserved.
+    errors = sorted(_SCHEMA_VALIDATOR.iter_errors(dossier_data),
+                    key=lambda e: list(e.absolute_path))
+    if errors:
+        summary = "; ".join(
+            ("/".join(str(p) for p in e.absolute_path) or "<root>") + ": " + e.message
+            for e in errors[:5]
+        )
+        raise ValueError(
+            "Schema violation (schemas/dossier.schema.json): " + summary
+        )
 
 
 def verify_soul_manifest(dossier: dict, ledger_root: str):
