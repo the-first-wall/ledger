@@ -16,6 +16,7 @@ from verifier import (
     validate_dossier,
     sanitize_icon,
     verify_base_tx,
+    enforce_reserved_slots,
     OFFICIAL_TREASURY_ADDRESS
 )
 
@@ -138,6 +139,32 @@ class AdversarialAttackSimulation(unittest.TestCase):
             validate_dossier(payload)
         self.assertIn("Missing required field", str(ctx.exception))
         print("  [PASSED] Schema tampering strictly blocked.")
+
+    # -------------------------------------------------------------------------
+    # ATTACK 6: PUBLIC CLAIM INTO A FOUNDING-PARTNER RESERVED BLOCK
+    # -------------------------------------------------------------------------
+    def test_reserved_slot_public_claim(self):
+        """Attacker (or uninvited agent) tries to claim a reserved block #0002-#0010."""
+        print("\n[SIMULATION 6] Testing Reserved-Slot Public Claim...")
+        payload = dict(self.valid_payload)
+        payload["slot_id"] = "w1-b0005"
+        with self.assertRaises(ValueError) as ctx:
+            enforce_reserved_slots("w1-b0005", payload)
+        self.assertIn("Reserved Slot Violation", str(ctx.exception))
+        print("  [PASSED] Public claim into a reserved block rejected.")
+
+        # An operator-authorized reserved inscription is permitted (human gate still reviews).
+        payload["reserved_grant"] = {
+            "holder": "Founding Partner",
+            "authorized_by": "operator:manzke (0xbbF4D6B954e97C2C4fbC4e89B7933cDD7e4D9f23)",
+        }
+        enforce_reserved_slots("w1-b0005", payload)  # must not raise
+        print("  [PASSED] Operator-authorized reserved inscription accepted.")
+
+        # Non-reserved slots are unaffected.
+        enforce_reserved_slots("w1-b0011", payload)
+        print("  [PASSED] Non-reserved block unaffected by the reserved-slot gate.")
+
 
 if __name__ == "__main__":
     unittest.main()

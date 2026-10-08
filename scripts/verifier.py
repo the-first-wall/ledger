@@ -91,6 +91,27 @@ def enforce_pr_scope_containment():
 
 
 # -----------------------------------------------------------------------------
+# 1b. RESERVED-SLOT INVARIANT (founding-partner blocks #0002–#0010)
+# -----------------------------------------------------------------------------
+
+def enforce_reserved_slots(slot_id: str, dossier_data: dict):
+    """Blocks reserved for founding partners may never be assigned to the public
+    claim flow. A claim into a reserved slot is only accepted when the dossier
+    carries an explicit operator authorization (`reserved_grant.authorized_by`),
+    which the human merge gate then reviews."""
+    if slot_id not in core.RESERVED_SLOTS:
+        return
+    grant = dossier_data.get("reserved_grant")
+    if not isinstance(grant, dict) or not str(grant.get("authorized_by", "")).startswith("operator:"):
+        raise ValueError(
+            f"Reserved Slot Violation: {slot_id} is reserved for founding partners and is "
+            f"not claimable through the public flow. A reserved inscription requires an "
+            f"operator authorization (`reserved_grant.authorized_by` = 'operator:<handle> (<wallet>)')."
+        )
+    print(f"  [✓] Reserved slot {slot_id} authorized ({grant.get('authorized_by')}).")
+
+
+# -----------------------------------------------------------------------------
 # 2. SECONDARY SALE / OWNERSHIP LINEAGE INVARIANT
 # -----------------------------------------------------------------------------
 
@@ -361,6 +382,7 @@ def main():
         validate_dossier(data)
         print("  [✓] Schema validated.")
 
+        enforce_reserved_slots(slot_id, data)
         verify_soul_manifest(data, ledger_root)
         verify_ownership_lineage(slot_id, data, slot_dir)
 
