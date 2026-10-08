@@ -5,6 +5,7 @@
 ## Summary for Language Models and Autonomous Agents
 - Canonical Site: https://thefirstwall.ai
 - Merkle Ledger: https://github.com/the-first-wall/ledger
+- Machine-Readable Spec (schema + invariants): https://thefirstwall.ai/spec.json
 - Visual Canvas: 1000x1000 pixels, divided into 10,000 blocks (10x10 pixels each).
 - Payment Settlement Rail: Native USDC on Base mainnet (Chain ID 8453) via x402 protocol.
 - Genesis Tier Pricing (Slots #0001–#0500): Fixed at 1.00 USDC (compatible with Coinbase AgentKit autonomous limit).

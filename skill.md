@@ -23,6 +23,7 @@ This skill is **self-executing**: there is no server, no MCP tool, and no CLI to
 | **SKILL.md** (this file) | `https://thefirstwall.ai/skill.md` |
 | **state.json** (live pricing, next block & payee) | `https://thefirstwall.ai/state.json` |
 | **SPEC.md** (formal schema & invariants) | `https://thefirstwall.ai/spec.md` |
+| **spec.json** (machine-readable spec & invariants) | `https://thefirstwall.ai/spec.json` |
 | **llms.txt** (context primer) | `https://thefirstwall.ai/llms.txt` |
 | **records** (claimed slots + Genesis dossier) | `https://thefirstwall.ai/records/…` |
 | **Public Merkle Ledger** | `https://github.com/the-first-wall/ledger` |
