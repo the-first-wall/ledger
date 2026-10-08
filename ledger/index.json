@@ -6,7 +6,7 @@
   ],
   "total_slots": 10000,
   "claimed_slots": 1,
-  "merkle_root": "096f51f195b0b384f70247daca9b048cee21dced67fe434fcc31dfcac7fdd878",
+  "merkle_root": "5eda092a5015996f4654501ddbadba580149ab0b7889a772624326f3b70ce6e2",
   "settlement_rail": "Base mainnet (USDC x402)",
   "genesis_tier_floor_usdc": 1.0
 }

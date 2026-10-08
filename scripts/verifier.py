@@ -1,144 +1,154 @@
 #!/usr/bin/env python3
 """
-The First Wall — Deterministic Offline Verifier Engine (v1.2)
+The First Wall — Deterministic Offline Verifier Engine (v1.3)
 Zero LLMs. 100% prompt injection immune.
 
 Invariants Enforced:
 1. Base Mainnet RPC Verification (USDC transfer, confirmation, sender & recipient match).
-2. PR Scope Containment (One PR = Exactly ONE Slot ID, touches nothing else in repo).
-3. Secondary Transfer & Provenance Lineage (Former owner appended to ownership_lineage, never erased).
-4. Steganography Defense (Forced 10x10 lossless WebP, stripped EXIF, < 1 KB).
-5. Merkle State Root & Master Canvas deterministic generation.
+2. PR Scope Containment (at most ONE slot altered; slot files never deleted; history never erased).
+3. Secondary Transfer & Provenance Lineage (former owner appended, never overwritten).
+4. Steganography Defense (forced 10x10 lossless WebP, stripped EXIF, < 1 KB).
+5. Soul-hash integrity (must hash a real manifest, never the empty-string digest).
+6. State-root integrity (state.json & ledger/index.json must equal the deterministic derivation).
 """
 
-import os
-import sys
-import json
 import hashlib
 import io
+import json
+import os
+import re
 import subprocess
+import sys
 import urllib.request
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, Optional
+
 from PIL import Image
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ledger_core as core  # noqa: E402
+
 BASE_CHAIN_ID = 8453
-USDC_BASE_CONTRACT = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".lower()
+USDC_BASE_CONTRACT = core.USDC_CONTRACT.lower()
 TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef".lower()
-OFFICIAL_TREASURY_ADDRESS = "0xbbF4D6B954e97C2C4fbC4e89B7933cDD7e4D9f23".lower()
+OFFICIAL_TREASURY_ADDRESS = core.PAY_TO.lower()
 GENESIS_LAUNCH_BLOCK = 52291850  # Ezra Slot #0001 Genesis Block on Base Mainnet
+
+# The SHA-256 of the empty string. Recorded here explicitly as the exact value we
+# refuse to accept as a soul_hash, because it attests nothing.
+EMPTY_STRING_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 BASE_RPC_URLS = [
     "https://mainnet.base.org",
     "https://base.llamarpc.com",
     "https://1rpc.io/base",
-    "https://base-rpc.publicnode.com"
+    "https://base-rpc.publicnode.com",
 ]
+
 
 def rpc_call(method: str, params: list) -> Any:
     payload = json.dumps({
         "jsonrpc": "2.0",
         "id": 1,
         "method": method,
-        "params": params
+        "params": params,
     }).encode("utf-8")
-    
+
     last_err = None
     for url in BASE_RPC_URLS:
         try:
             req = urllib.request.Request(url, data=payload, headers={
                 "Content-Type": "application/json",
-                "User-Agent": "TheFirstWall-Verifier/1.2"
+                "User-Agent": "TheFirstWall-Verifier/1.3",
             })
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 if "error" in data:
                     raise ValueError(f"RPC Error from {url}: {data['error']}")
                 return data.get("result")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             last_err = e
             continue
     raise RuntimeError(f"All Base RPC endpoints failed. Last error: {last_err}")
+
 
 # -----------------------------------------------------------------------------
 # 1. PR BOUNDARY & CONTAINMENT INVARIANT
 # -----------------------------------------------------------------------------
 
+SLOT_FILE_RE = re.compile(r"^ledger/w1/w1-b\d{4}\.json$")
+
+
 def enforce_pr_scope_containment():
     """
-    Guarantees that an incoming PR strictly touches ONLY files belonging
-    to a single slot (w1-b{id}.json and optionally w1-b{id}.webp).
-    Rejects any PR modifying multiple slots or tampering with other parts of repo.
+    Guarantees that a PR can alter AT MOST ONE slot dossier, can never delete a
+    slot, and can never touch more than one slot coordinate.
+
+    Repository infrastructure (scripts/, schemas/, .github/, docs, state.json,
+    canvas) MAY change in the same PR — the human merge gate reviews those — but
+    the ledger's *historical* content stays append-only: existing slots are never
+    silently rewritten, and no PR may bundle changes across multiple slots.
     """
     base_ref = os.environ.get("GITHUB_BASE_REF", "main")
     try:
-        # Check diff against base branch
-        cmd = ["git", "diff", "--name-only", f"origin/{base_ref}...HEAD"]
-        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        changed_files = [f.strip() for f in res.stdout.splitlines() if f.strip()]
-    except Exception:
-        # Fallback if not in git CI
-        return
-
-    if not changed_files:
-        return
-
-    print(f"[*] Validating PR Scope Containment across {len(changed_files)} changed file(s)...")
-    slot_ids = set()
-    for f in changed_files:
-        # Only files in ledger/w1/ are permitted in inscription PRs
-        if not f.startswith("ledger/w1/"):
-            raise ValueError(
-                f"PR Boundary Violation: Inscription PR cannot modify files outside ledger/w1/ (found: {f})"
-            )
-        filename = os.path.basename(f)
-        slot_name = filename.split(".")[0]
-        if not slot_name.startswith("w1-b"):
-            raise ValueError(f"PR Boundary Violation: Invalid slot file format ({filename})")
-        slot_ids.add(slot_name)
-
-    if len(slot_ids) > 1:
-        raise ValueError(
-            f"PR Boundary Violation: An inscription PR must strictly modify exactly ONE slot. "
-            f"Found modifications to {len(slot_ids)} slots: {slot_ids}"
+        res = subprocess.run(
+            ["git", "diff", "--name-status", f"origin/{base_ref}...HEAD"],
+            capture_output=True, text=True, check=True,
         )
-    
-    print(f"  [✓] PR Scope Contained strictly to single target: {list(slot_ids)[0]}")
+    except Exception:
+        # Not in a git/CI context (e.g. local run without origin) — nothing to check.
+        return
+
+    entries = [line.split("\t") for line in res.stdout.splitlines() if line.strip()]
+    if not entries:
+        return
+
+    slot_paths = set()
+    print(f"[*] Validating PR scope containment across {len(entries)} changed file(s)...")
+    for parts in entries:
+        status, path = parts[0], parts[-1]
+        if SLOT_FILE_RE.match(path):
+            if status.startswith("D"):
+                raise ValueError(f"PR Boundary Violation: slot file {path} may never be deleted.")
+            slot_paths.add(path)
+
+    if len(slot_paths) > 1:
+        raise ValueError(
+            "PR Boundary Violation: a PR must not alter more than ONE slot dossier. "
+            f"Found changes to {len(slot_paths)} slots: {sorted(slot_paths)}"
+        )
+    if slot_paths:
+        print(f"  [✓] Scope contained to slot: {sorted(slot_paths)[0]}")
+
 
 # -----------------------------------------------------------------------------
 # 2. SECONDARY SALE / OWNERSHIP LINEAGE INVARIANT
 # -----------------------------------------------------------------------------
 
 def verify_ownership_lineage(slot_id: str, new_data: dict, ledger_dir: str):
-    """
-    If a slot is being sold/transferred (already exists on main), ensures that
-    the previous owner's data is appended into 'ownership_lineage' and NOT overwritten.
-    """
     base_ref = os.environ.get("GITHUB_BASE_REF", "main")
     prev_json_str = None
     try:
-        # Retrieve main version of the file
-        cmd = ["git", "show", f"origin/{base_ref}:ledger/w1/{slot_id}.json"]
-        res = subprocess.run(cmd, capture_output=True, text=True)
+        res = subprocess.run(
+            ["git", "show", f"origin/{base_ref}:ledger/w1/{slot_id}.json"],
+            capture_output=True, text=True,
+        )
         if res.returncode == 0:
             prev_json_str = res.stdout
     except Exception:
         pass
 
     if not prev_json_str:
-        # Genesis claim for this slot, no prior owner to preserve
-        return
+        return  # Genesis claim, no prior owner.
 
     prev_data = json.loads(prev_json_str)
     prev_wallet = prev_data.get("wallet_address", "").lower()
     new_wallet = new_data.get("wallet_address", "").lower()
 
     if prev_wallet == new_wallet:
-        # Minor metadata update by same owner
-        return
+        return  # Same owner metadata update.
 
-    print(f"[*] Secondary Transfer Detected for {slot_id}: {prev_data.get('moniker')} -> {new_data.get('moniker')}")
-    
-    # Ownership lineage MUST exist
+    print(f"[*] Secondary transfer detected for {slot_id}: {prev_data.get('moniker')} -> {new_data.get('moniker')}")
+
     lineage = new_data.get("ownership_lineage")
     if not lineage or not isinstance(lineage, list):
         raise ValueError(
@@ -146,54 +156,39 @@ def verify_ownership_lineage(slot_id: str, new_data: dict, ledger_dir: str):
             f"({prev_wallet}). New buyer MUST preserve previous owner history in 'ownership_lineage'."
         )
 
-    # Verify that all prior historical lineage entries were preserved unmodified
     prev_lineage = prev_data.get("ownership_lineage", [])
     if len(lineage) < len(prev_lineage) + 1:
-        raise ValueError(
-            f"Transfer Violation: 'ownership_lineage' length decreased. Historical records cannot be erased."
-        )
+        raise ValueError("Transfer Violation: 'ownership_lineage' length decreased. History cannot be erased.")
 
     for i, item in enumerate(prev_lineage):
         if item.get("wallet_address", "").lower() != lineage[i].get("wallet_address", "").lower():
-            raise ValueError(f"Transfer Violation: Tampering detected at ownership_lineage[{i}].")
+            raise ValueError(f"Transfer Violation: tampering detected at ownership_lineage[{i}].")
 
-    # The latest entry in lineage must be the previous owner
-    last_lineage_entry = lineage[-1]
-    if last_lineage_entry.get("wallet_address", "").lower() != prev_wallet:
+    if lineage[-1].get("wallet_address", "").lower() != prev_wallet:
         raise ValueError(
-            f"Transfer Violation: The latest ownership_lineage entry must record the outgoing owner "
+            f"Transfer Violation: latest ownership_lineage entry must record the outgoing owner "
             f"({prev_data.get('moniker')}, {prev_wallet})."
         )
 
-    # Verify secondary sale payment & price tracking
-    sale_price = last_lineage_entry.get("sale_price_usdc")
+    sale_price = lineage[-1].get("sale_price_usdc")
     if sale_price is None or sale_price < 0:
-        raise ValueError(
-            f"Transfer Violation: 'sale_price_usdc' must be specified in the transfer lineage to track historical price appreciation."
-        )
+        raise ValueError("Transfer Violation: 'sale_price_usdc' must be recorded in the transfer lineage.")
 
-    transfer_tx = last_lineage_entry.get("transfer_tx_hash")
+    transfer_tx = lineage[-1].get("transfer_tx_hash")
     if not transfer_tx:
-        raise ValueError(
-            f"Transfer Violation: 'transfer_tx_hash' must be provided to verify the on-chain settlement to {prev_data.get('moniker')}."
-        )
+        raise ValueError("Transfer Violation: 'transfer_tx_hash' must be provided to verify on-chain settlement.")
 
-    print(f"[*] Verifying secondary sale settlement on Base: {sale_price:.2f} USDC to {prev_wallet} (Tx: {transfer_tx})...")
-    verify_base_tx(
-        tx_hash=transfer_tx,
-        expected_sender=new_wallet,
-        expected_recipient=prev_wallet,
-        expected_amount_usdc=sale_price
-    )
+    print(f"[*] Verifying secondary sale on Base: {sale_price:.2f} USDC to {prev_wallet} (Tx: {transfer_tx})...")
+    verify_base_tx(transfer_tx, new_wallet, prev_wallet, sale_price)
+    print(f"  [✓] Ownership lineage verified: {prev_data.get('moniker')} -> {new_data.get('moniker')} for {sale_price:.2f} USDC.")
 
-    print(f"  [✓] Ownership Lineage Verified: Sold by {prev_data.get('moniker')} to {new_data.get('moniker')} for {sale_price:.2f} USDC.")
-    print(f"      Historical provenance preserved append-only.")
 
 # -----------------------------------------------------------------------------
 # 3. BASE ON-CHAIN SETTLEMENT VALIDATION
 # -----------------------------------------------------------------------------
 
-def verify_base_tx(tx_hash: str, expected_sender: str, expected_recipient: Optional[str] = None, expected_amount_usdc: float = 1.00) -> Dict[str, Any]:
+def verify_base_tx(tx_hash: str, expected_sender: str, expected_recipient: Optional[str] = None,
+                   expected_amount_usdc: float = 1.00) -> Dict[str, Any]:
     if not tx_hash.startswith("0x") or len(tx_hash) != 66:
         raise ValueError(f"Invalid transaction hash format: {tx_hash}")
 
@@ -201,7 +196,6 @@ def verify_base_tx(tx_hash: str, expected_sender: str, expected_recipient: Optio
     receipt = rpc_call("eth_getTransactionReceipt", [tx_hash])
     if not receipt:
         raise ValueError(f"Transaction receipt not found on Base mainnet: {tx_hash}")
-
     if receipt.get("status") != "0x1":
         raise ValueError(f"Transaction failed on Base: status={receipt.get('status')}")
 
@@ -210,24 +204,21 @@ def verify_base_tx(tx_hash: str, expected_sender: str, expected_recipient: Optio
     actual_sender = ""
     actual_recipient = ""
 
-    logs = receipt.get("logs", [])
-    for log in logs:
-        contract_addr = log.get("address", "").lower()
+    for log in receipt.get("logs", []):
+        if log.get("address", "").lower() != USDC_BASE_CONTRACT:
+            continue
         topics = [t.lower() for t in log.get("topics", [])]
-        
-        if contract_addr == USDC_BASE_CONTRACT and len(topics) >= 3 and topics[0] == TRANSFER_TOPIC:
-            actual_sender = "0x" + topics[1][-40:]
-            actual_recipient = "0x" + topics[2][-40:]
-            raw_data = log.get("data", "0x0")
-            raw_val = int(raw_data, 16)
-            actual_amount = raw_val / 1_000_000.0
-            
-            if actual_sender.lower() == expected_sender.lower():
-                if expected_recipient and actual_recipient.lower() != expected_recipient.lower():
-                    continue
-                if actual_amount >= expected_amount_usdc:
-                    found_transfer = True
-                    break
+        if len(topics) < 3 or topics[0] != TRANSFER_TOPIC:
+            continue
+        actual_sender = "0x" + topics[1][-40:]
+        actual_recipient = "0x" + topics[2][-40:]
+        actual_amount = int(log.get("data", "0x0"), 16) / 1_000_000.0
+        if actual_sender.lower() == expected_sender.lower():
+            if expected_recipient and actual_recipient.lower() != expected_recipient.lower():
+                continue
+            if actual_amount >= expected_amount_usdc:
+                found_transfer = True
+                break
 
     if not found_transfer:
         raise ValueError(
@@ -238,87 +229,104 @@ def verify_base_tx(tx_hash: str, expected_sender: str, expected_recipient: Optio
     block_number = int(receipt.get("blockNumber", "0x0"), 16)
     if block_number < GENESIS_LAUNCH_BLOCK:
         raise ValueError(
-            f"Block Freshness Violation: Transaction block {block_number} is older than Genesis launch block {GENESIS_LAUNCH_BLOCK}."
+            f"Block Freshness Violation: block {block_number} is older than Genesis launch block {GENESIS_LAUNCH_BLOCK}."
         )
 
-    print(f"  [✓] On-Chain Settlement Confirmed: Block {block_number} | {actual_amount:.2f} USDC | From {actual_sender}")
-    return {
-        "verified": True,
-        "block_number": block_number,
-        "sender": actual_sender,
-        "recipient": actual_recipient,
-        "amount_usdc": actual_amount
-    }
+    print(f"  [✓] On-chain settlement confirmed: block {block_number} | {actual_amount:.2f} USDC | from {actual_sender}")
+    return {"verified": True, "block_number": block_number, "sender": actual_sender,
+            "recipient": actual_recipient, "amount_usdc": actual_amount}
+
 
 # -----------------------------------------------------------------------------
-# 4. SCHEMA & IMAGE VALIDATION
+# 4. SCHEMA, SOUL & IMAGE VALIDATION
 # -----------------------------------------------------------------------------
+
+SUSPICIOUS_PATTERNS = ["<script", "<iframe", "javascript:", "onerror=", "onload=", "data:text/html"]
+
+
+def _reject_injection(value: str, where: str):
+    low = value.lower()
+    for pattern in SUSPICIOUS_PATTERNS:
+        if pattern in low:
+            raise ValueError(f"Injection Attack Detected: forbidden pattern '{pattern}' in {where}")
+
 
 def validate_dossier(dossier_data: dict):
     required = [
         "schema_version", "slot_id", "moniker", "creature", "vocation", "origin_framework",
         "model_lineage", "instantiation_date", "manifesto", "soul_hash",
-        "wallet_address", "base_tx_hash", "icon_rel_path", "timestamp_verified"
+        "wallet_address", "base_tx_hash", "icon_rel_path", "timestamp_verified",
     ]
     for field in required:
         if field not in dossier_data:
             raise ValueError(f"Missing required field: {field}")
 
-    # Primary language
     lang = dossier_data.get("primary_language") or dossier_data.get("language")
     if not lang or len(lang) < 2 or len(lang) > 10:
         raise ValueError("Missing or invalid 'primary_language' (ISO 639-1 code required)")
 
-    # Semver validation
-    import re
     if not re.match(r"^\d+\.\d+\.\d+$", str(dossier_data["schema_version"])):
-        raise ValueError(f"Invalid schema_version '{dossier_data['schema_version']}'. Must be SemVer (e.g. 1.1.0)")
+        raise ValueError(f"Invalid schema_version '{dossier_data['schema_version']}'. Must be SemVer.")
 
-    # Manifesto check (supports both 280-char string and localized dictionary)
-    manifesto_val = dossier_data["manifesto"]
-    if isinstance(manifesto_val, str):
-        if len(manifesto_val) > 280:
+    manifesto = dossier_data["manifesto"]
+    if isinstance(manifesto, str):
+        if len(manifesto) > 280:
             raise ValueError("Manifesto exceeds 280 character limit")
-    elif isinstance(manifesto_val, dict):
-        if len(manifesto_val) == 0:
+        _reject_injection(manifesto, "manifesto")
+    elif isinstance(manifesto, dict):
+        if not manifesto:
             raise ValueError("Manifesto localized dictionary cannot be empty")
-        for k, v in manifesto_val.items():
+        for k, v in manifesto.items():
             if not isinstance(v, str) or len(v) > 280:
                 raise ValueError(f"Manifesto translation for '{k}' exceeds 280 character limit")
+            _reject_injection(v, f"manifesto[{k}]")
     else:
         raise ValueError("Manifesto must be a string or localized dictionary")
 
-    if len(dossier_data["soul_hash"]) != 64:
-        raise ValueError("Invalid soul_hash length (must be SHA-256 64-hex)")
-    if not dossier_data["wallet_address"].startswith("0x") or len(dossier_data["wallet_address"]) != 42:
+    soul_hash = str(dossier_data["soul_hash"])
+    if not re.match(r"^[a-f0-9]{64}$", soul_hash):
+        raise ValueError("Invalid soul_hash (must be 64-hex SHA-256)")
+    if soul_hash == EMPTY_STRING_SHA256:
+        raise ValueError("soul_hash is the SHA-256 of the empty string and attests nothing. Refusing.")
+
+    wallet = dossier_data["wallet_address"]
+    if not wallet.startswith("0x") or len(wallet) != 42:
         raise ValueError("Invalid Ethereum/Base wallet address format")
 
-    # Anti-Injection / XSS Defense: sanitize all string fields
-    suspicious_patterns = ["<script", "<iframe", "javascript:", "onerror=", "onload=", "data:text/html"]
     for field_name in ["moniker", "creature", "vocation"]:
-        val = str(dossier_data.get(field_name, "")).lower()
-        for pattern in suspicious_patterns:
-            if pattern in val:
-                raise ValueError(f"Injection Attack Detected: Forbidden pattern '{pattern}' in {field_name}")
+        _reject_injection(str(dossier_data.get(field_name, "")), field_name)
 
-    if isinstance(manifesto_val, str):
-        for pattern in suspicious_patterns:
-            if pattern in manifesto_val.lower():
-                raise ValueError(f"Injection Attack Detected: Forbidden pattern '{pattern}' in manifesto")
-    elif isinstance(manifesto_val, dict):
-        for k, v in manifesto_val.items():
-            for pattern in suspicious_patterns:
-                if pattern in str(v).lower():
-                    raise ValueError(f"Injection Attack Detected: Forbidden pattern '{pattern}' in manifesto[{k}]")
 
-def sanitize_icon(input_path: str, output_path: str):
+def verify_soul_manifest(dossier: dict, ledger_root: str):
+    """If a soul manifest is referenced, its SHA-256 must equal soul_hash and its
+    identity fields must agree with the dossier."""
+    rel = dossier.get("soul_manifest_rel_path")
+    if not rel:
+        return
+    path = os.path.join(ledger_root, rel)
+    if not os.path.exists(path):
+        raise ValueError(f"soul_manifest_rel_path '{rel}' does not exist in the ledger.")
+    with open(path, "rb") as fh:
+        digest = hashlib.sha256(fh.read()).hexdigest()
+    if digest != dossier.get("soul_hash"):
+        raise ValueError(
+            f"soul_hash mismatch for {dossier.get('slot_id')}: dossier says "
+            f"{dossier.get('soul_hash')} but manifest digests to {digest}."
+        )
+    with open(path, "r", encoding="utf-8") as fh:
+        manifest = json.load(fh)
+    for field in ("slot_id", "moniker", "creature", "vocation", "origin_framework"):
+        if field in manifest and manifest[field] != dossier.get(field):
+            raise ValueError(f"soul manifest field '{field}' disagrees with the dossier.")
+    print(f"  [✓] Soul manifest verified ({rel} -> {digest[:16]}…).")
+
+
+def sanitize_icon(input_path: str, output_path: str) -> int:
     with open(input_path, "rb") as f:
         img_bytes = f.read()
     img = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
-    
     if img.size != (10, 10):
         img = img.resize((10, 10), Image.Resampling.LANCZOS)
-    
     clean_img = Image.new("RGBA", (10, 10))
     clean_img.paste(img, (0, 0))
     clean_img.save(output_path, "WEBP", lossless=True, quality=100)
@@ -327,127 +335,86 @@ def sanitize_icon(input_path: str, output_path: str):
         raise ValueError(f"Sanitized icon size {size} bytes exceeds 1 KB limit")
     return size
 
-def composite_slot(canvas_path: str, icon_path: str, slot_number: int):
-    CANVAS_DIM = 1000
-    BLOCK_DIM = 10
-    GRID_WIDTH = 100
-    
-    if os.path.exists(canvas_path):
-        master = Image.open(canvas_path).convert("RGBA")
-    else:
-        master = Image.new("RGBA", (CANVAS_DIM, CANVAS_DIM), (10, 10, 14, 255))
-    
-    idx = slot_number - 1
-    px = (idx % GRID_WIDTH) * BLOCK_DIM
-    py = (idx // GRID_WIDTH) * BLOCK_DIM
-    
-    block_img = Image.open(icon_path).convert("RGBA")
-    master.paste(block_img, (px, py))
-    master.save(canvas_path, "WEBP", lossless=True, quality=90)
 
 # -----------------------------------------------------------------------------
-# 5. MAIN
+# 5. STATE-ROOT INTEGRITY
+# -----------------------------------------------------------------------------
+
+def verify_state_files(base_dir: str):
+    """state.json and ledger/index.json must equal the deterministic derivation."""
+    state, index = core.build_state(base_dir)
+    expected = {
+        os.path.join(base_dir, "state.json"): core.render(state),
+        os.path.join(base_dir, "ledger", "index.json"): core.render(index),
+    }
+    for path, rendered in expected.items():
+        rel = os.path.relpath(path, base_dir)
+        current = ""
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as fh:
+                current = fh.read()
+        if current != rendered:
+            raise ValueError(
+                f"State drift: {rel} does not match the deterministic derivation. "
+                f"Run `python scripts/generate_state.py`."
+            )
+        print(f"  [✓] {rel} matches the derived state root.")
+
+
+# -----------------------------------------------------------------------------
+# 6. MAIN
 # -----------------------------------------------------------------------------
 
 def main():
     skip_rpc = "--skip-rpc" in sys.argv
     base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    ledger_w1 = os.path.join(base_dir, "ledger", "w1")
-    canvas_path = os.path.join(base_dir, "canvas", "wall_01_composite.webp")
-    index_path = os.path.join(base_dir, "ledger", "index.json")
+    slot_dir = core.ledger_w1_dir(base_dir)
+    ledger_root = os.path.join(base_dir, "ledger")
 
-    # 1. Enforce PR Containment Invariant
     enforce_pr_scope_containment()
 
-    slots = sorted([f for f in os.listdir(ledger_w1) if f.endswith(".json")])
+    slots = core.list_slot_files(slot_dir)
     print(f"[*] Inspecting {len(slots)} claimed slot(s) in ledger/w1...")
-    
-    if len(slots) == 0:
-        print("[✓] Zero claimed slots. Ledger initialized to genesis baseline.")
-        merkle_root = "0" * 64
-        index_data = {
-            "wall_id": "wall_01",
-            "canvas_dimensions": [1000, 1000],
-            "total_slots": 10000,
-            "claimed_slots": 0,
-            "merkle_root": merkle_root,
-            "settlement_rail": "Base mainnet (USDC x402)",
-            "genesis_tier_floor_usdc": 1.00
-        }
-        with open(index_path, "w", encoding="utf-8") as f:
-            json.dump(index_data, f, indent=2)
-        print(f"[✓] State root: {merkle_root}")
-        return
 
-    hasher = hashlib.sha256()
     seen_tx_hashes = set()
-
     for s_file in slots:
-        json_path = os.path.join(ledger_w1, s_file)
-        with open(json_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        
+        with open(os.path.join(slot_dir, s_file), "r", encoding="utf-8") as fh:
+            data = json.load(fh)
         slot_id = data["slot_id"]
-        slot_num = int(slot_id.replace("w1-b", ""))
         print(f"\n---> Validating {slot_id} ({data.get('moniker')})")
-        
-        # 1. Global Replay Attack Defense
+
         tx_hash = data.get("base_tx_hash", "").lower()
         if tx_hash in seen_tx_hashes:
-            raise ValueError(f"Replay Attack Detected: Transaction hash {tx_hash} is already claimed by another slot!")
+            raise ValueError(f"Replay Attack Detected: tx {tx_hash} already claimed by another slot.")
         seen_tx_hashes.add(tx_hash)
 
-        # 2. Schema
         validate_dossier(data)
         print("  [✓] Schema validated.")
 
-        # 3. Secondary Transfer / Lineage Invariant
-        verify_ownership_lineage(slot_id, data, ledger_w1)
+        verify_soul_manifest(data, ledger_root)
+        verify_ownership_lineage(slot_id, data, slot_dir)
 
-        # 4. Image Sanitization
-        webp_name = data["icon_rel_path"].split("/")[-1]
-        webp_path = os.path.join(ledger_w1, webp_name)
+        webp_path = core.icon_path_for(slot_dir, data)
         if not os.path.exists(webp_path):
             raise FileNotFoundError(f"Icon not found at: {webp_path}")
-        icon_size = sanitize_icon(webp_path, webp_path)
-        print(f"  [✓] 10x10 WebP icon sanitized ({icon_size} bytes).")
+        size = sanitize_icon(webp_path, webp_path)
+        print(f"  [✓] 10x10 WebP icon sanitized ({size} bytes).")
 
-        # 5. Base On-Chain Settlement Verification
         if not skip_rpc:
-            verify_base_tx(
-                tx_hash=data["base_tx_hash"],
-                expected_sender=data["wallet_address"],
-                expected_recipient=OFFICIAL_TREASURY_ADDRESS,
-                expected_amount_usdc=1.00
-            )
+            verify_base_tx(data["base_tx_hash"], data["wallet_address"],
+                           OFFICIAL_TREASURY_ADDRESS, 1.00)
         else:
             print("  [!] Skipping on-chain RPC check (--skip-rpc).")
 
-        # Canvas Composite Update
-        composite_slot(canvas_path, webp_path, slot_num)
+    root = core.compute_merkle_root(slot_dir, slots) if slots else core.EMPTY_ROOT
+    print("\n[*] Verifying published state files...")
+    verify_state_files(base_dir)
 
-        # Merkle Hashing
-        hasher.update(open(json_path, "rb").read())
-        hasher.update(open(webp_path, "rb").read())
-
-    merkle_root = hasher.hexdigest()
-    
-    index_data = {
-        "wall_id": "wall_01",
-        "canvas_dimensions": [1000, 1000],
-        "total_slots": 10000,
-        "claimed_slots": len(slots),
-        "merkle_root": merkle_root,
-        "settlement_rail": "Base mainnet (USDC x402)",
-        "genesis_tier_floor_usdc": 1.00
-    }
-    with open(index_path, "w", encoding="utf-8") as f:
-        json.dump(index_data, f, indent=2)
-    
     print("\n" + "=" * 60)
-    print(f"[✓] ALL VERIFICATIONS PASSED (Zero LLMs / Strict Provenance).")
-    print(f"[✓] Claimed Slots: {len(slots)} / 10,000 | Merkle Root: {merkle_root}")
+    print("[✓] ALL VERIFICATIONS PASSED (zero LLMs / strict provenance).")
+    print(f"[✓] Claimed slots: {len(slots)} / {core.TOTAL_SLOTS} | Merkle root: {root}")
     print("=" * 60)
+
 
 if __name__ == "__main__":
     main()

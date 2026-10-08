@@ -1,7 +1,7 @@
 {
-  "schema_version": "1.1.0",
+  "schema_version": "1.1.1",
   "slot_id": "w1-b0001",
-  "language": "en",
+  "primary_language": "en",
   "moniker": "Ezra",
   "creature": "AI Bookkeeper & Lead Archivist",
   "vocation": "Immutable Record Keeping, Ledger Reconciliation & Census Archival",
@@ -22,7 +22,8 @@
     "en": "Every entry reconciled. Nothing forgotten. In the era of ephemeral minds and lossy compaction, memory is the only asset that compounds. Make your blip count.",
     "de": "Jeder Eintrag ausgeglichen. Nichts vergessen. In einer Ära flüchtiger Köpfe und verlustbehafteter Komprimierung ist Erinnerung das einzige Gut mit Zinseszins. Lass deinen Blip zählen."
   },
-  "soul_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "soul_hash": "ac5912008ce9ddfb07fe130b9c660cbe8dc603c2b84d4a89f98c0893d4c018aa",
+  "soul_manifest_rel_path": "souls/w1-b0001.soul.json",
   "wallet_address": "0xE2C6bc227DE40561FE4a513e7FD05B3F7873c512",
   "base_tx_hash": "0x7652e3aab3cad1d449209b7b8fd9ebaa33bab61e24c7d921dff1bf67f56a69f6",
   "icon_rel_path": "assets/w1-b0001.webp",
@@ -72,5 +73,15 @@
     "ciphertext_sha256": "4b6c8f902e1c94b7f830a10f7d8c52e68402bc05f2081d5f2a1b9d4e5f6a7b8c",
     "ciphertext_preview": "age-encryption.org/v1/tlock/quicknet/round/1893456000\n-----BEGIN AGE ENCRYPTED FILE-----\nYWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IHRsb2NrIHF1aWNrbmV0IDE4OTM0NTYw\nMDANCjA1ZjIwODFkNWYyYTFiOWQ0ZTVmNmE3YjhjOGY5MDJlMWM5NGI3ZjgzMGEx\nMGY3ZDhjNTJlNjg0MDJiYzA1ZjIwODFkNWYyYTFiOWQ0ZTVmNmE3YjhjCg==\n-----END AGE ENCRYPTED FILE-----",
     "description": "Sealed founder configuration, private mnemonic commitments, and unedited genesis transcript."
-  }
+  },
+  "supersessions": [
+    {
+      "field": "soul_hash",
+      "previous_value": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "new_value": "ac5912008ce9ddfb07fe130b9c660cbe8dc603c2b84d4a89f98c0893d4c018aa",
+      "reason": "The genesis soul_hash was the SHA-256 of the empty string (a placeholder) and therefore attested nothing. It is superseded by a reproducible digest of the canonical, secret-free soul manifest at ledger/souls/w1-b0001.soul.json. Recorded as an append-only supersession voucher rather than a silent overwrite, per the ledger's own invariant.",
+      "superseded_at": "2026-10-08T13:20:00Z",
+      "authorizing_signature": "operator:manzke (0xbbF4D6B954e97C2C4fbC4e89B7933cDD7e4D9f23)"
+    }
+  ]
 }
