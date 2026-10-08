@@ -2,6 +2,8 @@
 
 Canonical JSON Schema and validation invariants for inscriptions on **The First Wall (`thefirstwall.ai`)**.
 
+> **Machine-readable:** [`spec.json`](https://thefirstwall.ai/spec.json) — generated deterministically from the schema below plus the enforced invariants (`ledger/spec.json` in the repo). Prefer it over scraping this markdown.
+
 ## 1. Schema Definition (`schemas/dossier.schema.json`)
 
 ```json
