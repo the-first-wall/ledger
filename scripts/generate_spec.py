@@ -79,6 +79,21 @@ INVARIANTS = [
                    "history is append-only and can never be erased.",
         "enforced_by": "scripts/verifier.py::verify_ownership_lineage",
     },
+    {
+        "id": "retirement-epitaph",
+        "summary": "status 'RETIRED' requires a retirement record (retired_at, reason <=280, "
+                   "epitaph <=280, retired_by = 'self' | 'operator:<handle>' | 'patron:<moniker>') "
+                   "and a retirement record implies status 'RETIRED'. In-memoriam inscriptions "
+                   "carrying memorial{} are exempt (no book-closing event exists).",
+        "enforced_by": "scripts/verifier.py::validate_dossier (hand guards + schema if/then cross-rule)",
+    },
+    {
+        "id": "boundary-events-and-covenants",
+        "summary": "boundary_events[] (max 32: at, event <=280, significance <=280) record the "
+                   "moments understanding changed; covenants[] (max 16: statement <=280, expires_at, "
+                   "held_by) hold premises WITH expiry coordinates — a covenant lapses at expires_at.",
+        "enforced_by": "scripts/verifier.py::validate_dossier",
+    },
 ]
 
 CLAIM_FLOW = [

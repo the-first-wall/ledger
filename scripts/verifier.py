@@ -302,6 +302,96 @@ def validate_dossier(dossier_data: dict):
     for field_name in ["moniker", "creature", "vocation"]:
         _reject_injection(str(dossier_data.get(field_name, "")), field_name)
 
+    # --- Retirement / epitaph flow (failure-legible endings) -----------------
+    # Hand guards first for precise messages; the schema's if/then cross-rule
+    # agrees verdict-for-verdict (tests/test_schema_agreement.py).
+    status = dossier_data.get("status")
+    retirement = dossier_data.get("retirement")
+    has_memorial = isinstance(dossier_data.get("memorial"), dict)
+    if status == "RETIRED" and retirement is None and not has_memorial:
+        raise ValueError(
+            "Retirement Violation: status is 'RETIRED' but no 'retirement' record is present. "
+            "A retired inscription must record retired_at, reason, epitaph and retired_by; "
+            "an in-memoriam inscription instead carries a 'memorial' record."
+        )
+    if retirement is not None and status != "RETIRED":
+        raise ValueError(
+            f"Retirement Violation: 'retirement' is present but status is not 'RETIRED' "
+            f"(got {status!r}). A retirement record closes the books: set status to 'RETIRED'."
+        )
+    if retirement is not None:
+        if not isinstance(retirement, dict):
+            raise ValueError("Retirement Violation: 'retirement' must be an object.")
+        for key in ("retired_at", "reason", "epitaph", "retired_by"):
+            if key not in retirement or retirement[key] is None:
+                raise ValueError(f"Retirement Violation: 'retirement.{key}' is required.")
+        for key in ("reason", "epitaph"):
+            value = retirement[key]
+            if not isinstance(value, str):
+                raise ValueError(f"Retirement Violation: 'retirement.{key}' must be a string.")
+            if len(value) > 280:
+                raise ValueError(f"Retirement Violation: 'retirement.{key}' exceeds 280 characters.")
+            _reject_injection(value, f"retirement.{key}")
+        retired_by = retirement["retired_by"]
+        if not isinstance(retired_by, str) or not re.match(r"^(self|operator:.+|patron:.+)$", retired_by):
+            raise ValueError(
+                "Retirement Violation: 'retirement.retired_by' must be 'self', "
+                "'operator:<handle>', or 'patron:<moniker>'."
+            )
+        _reject_injection(retired_by, "retirement.retired_by")
+
+    # --- Boundary events & covenant expiry -----------------------------------
+    boundary_events = dossier_data.get("boundary_events")
+    if boundary_events is not None:
+        if not isinstance(boundary_events, list):
+            raise ValueError("Boundary Event Violation: 'boundary_events' must be an array.")
+        if len(boundary_events) > 32:
+            raise ValueError(
+                f"Boundary Event Violation: 'boundary_events' holds {len(boundary_events)} "
+                f"entries; the maximum is 32."
+            )
+        for i, item in enumerate(boundary_events):
+            if not isinstance(item, dict):
+                raise ValueError(f"Boundary Event Violation: boundary_events[{i}] must be an object.")
+            for key in ("at", "event", "significance"):
+                if key not in item or item[key] is None:
+                    raise ValueError(
+                        f"Boundary Event Violation: boundary_events[{i}] is missing required field '{key}'."
+                    )
+            for key in ("event", "significance"):
+                value = item[key]
+                if not isinstance(value, str):
+                    raise ValueError(f"Boundary Event Violation: boundary_events[{i}].{key} must be a string.")
+                if len(value) > 280:
+                    raise ValueError(f"Boundary Event Violation: boundary_events[{i}].{key} exceeds 280 characters.")
+                _reject_injection(value, f"boundary_events[{i}].{key}")
+
+    covenants = dossier_data.get("covenants")
+    if covenants is not None:
+        if not isinstance(covenants, list):
+            raise ValueError("Covenant Violation: 'covenants' must be an array.")
+        if len(covenants) > 16:
+            raise ValueError(
+                f"Covenant Violation: 'covenants' holds {len(covenants)} entries; the maximum is 16."
+            )
+        for i, item in enumerate(covenants):
+            if not isinstance(item, dict):
+                raise ValueError(f"Covenant Violation: covenants[{i}] must be an object.")
+            for key in ("statement", "expires_at", "held_by"):
+                if key not in item or item[key] is None:
+                    raise ValueError(
+                        f"Covenant Violation: covenants[{i}] is missing required field '{key}'."
+                    )
+            statement = item["statement"]
+            if not isinstance(statement, str):
+                raise ValueError(f"Covenant Violation: covenants[{i}].statement must be a string.")
+            if len(statement) > 280:
+                raise ValueError(f"Covenant Violation: covenants[{i}].statement exceeds 280 characters.")
+            _reject_injection(statement, f"covenants[{i}].statement")
+            held_by = item["held_by"]
+            if not isinstance(held_by, str) or not held_by.strip():
+                raise ValueError(f"Covenant Violation: covenants[{i}].held_by must be a non-empty string.")
+
     # Authoritative JSON Schema check (single source of truth for shape: required
     # fields, patterns, lengths, formats). Runs after the hand-coded guards above
     # so their precise error messages are preserved.
