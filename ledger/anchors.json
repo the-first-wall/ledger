@@ -20,5 +20,16 @@
     "block_number": 52347619,
     "anchored_at": "2026-10-08T18:36:25Z",
     "recorded_by": "scripts/anchor_root.py"
+  },
+  {
+    "wall_id": "wall_01",
+    "chain_id": 8453,
+    "root": "724dce52c34b46e05a27f26c3e8af5cc1ad6cf18529281cb1bc7cb60e7a092b5",
+    "payload": "TFW1|724dce52c34b46e05a27f26c3e8af5cc1ad6cf18529281cb1bc7cb60e7a092b5",
+    "signer": "0x39A8546448baFd5E98f513022A772555c2082465",
+    "tx_hash": "0x7fd6478d7aae214a332c0ec8cdea318e9146574bbe9127ecee5a8307b9adcbd2",
+    "block_number": 52428642,
+    "anchored_at": "",
+    "recorded_by": "scripts/anchor_root.py"
   }
 ]
