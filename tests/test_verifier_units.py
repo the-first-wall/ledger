@@ -175,7 +175,31 @@ class LedgerCoreTests(unittest.TestCase):
     def test_next_available_slot_skips_reserved(self):
         state, _ = core.build_state(REPO)
         self.assertNotIn(state["next_available_slot"], core.RESERVED_SLOTS)
-        self.assertEqual(state["reserved_slots"], core.RESERVED_SLOTS)
+        # Published reserved_slots are the reserved blocks that are STILL free:
+        # a reader that skips them must never skip an inscribed block.
+        claimed = {f[:-5] for f in core.list_slot_files(core.ledger_w1_dir(REPO))}
+        self.assertEqual(state["reserved_slots"],
+                         [s for s in core.RESERVED_SLOTS if s not in claimed])
+        self.assertNotIn("w1-b0002", state["reserved_slots"])
+        self.assertEqual(state["reserved_slot_range"], [2, 10])
+
+    def test_settlements_index_is_deterministic_and_conflict_free(self):
+        a, conflicts = core.build_settlements(REPO)
+        b, _ = core.build_settlements(REPO)
+        self.assertEqual(core.render(a), core.render(b))
+        self.assertEqual(conflicts, [])
+        self.assertEqual(a["count"], len(a["settlements"]))
+        for tx, entry in a["settlements"].items():
+            self.assertEqual(tx, tx.lower())
+            self.assertRegex(entry["slot_id"], r"^w1-b\d{4,5}$")
+
+    def test_slot_number_range(self):
+        self.assertEqual(core.slot_number("w1-b0001"), 1)
+        self.assertEqual(core.slot_number("w1-b10000"), 10000)
+        self.assertEqual(core.slot_id_for(10000), "w1-b10000")
+        for bad in ("w1-b0000", "w1-b10001", "w1-b1", "b0001", "w1-b00010"):
+            with self.assertRaises(ValueError, msg=bad):
+                core.slot_number(bad)
 
     def test_pricing_tiers_present(self):
         state, index = core.build_state(REPO)
@@ -188,17 +212,40 @@ class LedgerCoreTests(unittest.TestCase):
 
 class IconSanitizeTests(unittest.TestCase):
 
-    def test_oversized_image_is_forced_to_10x10_webp(self):
+    def test_wrong_size_is_rejected_not_resized(self):
         from PIL import Image
         with tempfile.TemporaryDirectory() as td:
             src = os.path.join(td, "dirty.png")
             Image.new("RGBA", (200, 137), (255, 0, 128, 255)).save(src, "PNG")
             out = os.path.join(td, "clean.webp")
+            with self.assertRaisesRegex(ValueError, "exactly 10x10"):
+                verifier.sanitize_icon(src, out)
+            self.assertFalse(os.path.exists(out))
+
+    def test_png_with_metadata_becomes_bare_vp8l(self):
+        from PIL import Image, PngImagePlugin
+        with tempfile.TemporaryDirectory() as td:
+            src = os.path.join(td, "icon.png")
+            img = Image.new("RGBA", (10, 10), (255, 0, 128, 255))
+            img.putpixel((2, 2), (0, 0, 0, 255))
+            meta = PngImagePlugin.PngInfo()
+            meta.add_text("Comment", "hidden payload " * 50)
+            img.save(src, "PNG", pnginfo=meta)
+            out = os.path.join(td, "clean.webp")
             size = verifier.sanitize_icon(src, out)
             self.assertLessEqual(size, 1024)
-            with Image.open(out) as im:
-                self.assertEqual(im.size, (10, 10))
-                self.assertEqual(im.format, "WEBP")
+            detail = verifier.verify_icon(out)
+            self.assertIn("10x10 lossless WebP", detail)
+            with open(out, "rb") as fh:
+                data = fh.read()
+            self.assertNotIn(b"hidden payload", data)
+            self.assertEqual([t for t, _ in verifier._webp_chunks(data)], [b"VP8L"])
+
+    def test_committed_icons_pass_structural_check(self):
+        slot_dir = core.ledger_w1_dir(REPO)
+        for f in core.list_slot_files(slot_dir):
+            with self.subTest(slot=f):
+                verifier.verify_icon(os.path.join(slot_dir, f[:-5] + ".webp"))
 
 
 class CheckLogTests(unittest.TestCase):

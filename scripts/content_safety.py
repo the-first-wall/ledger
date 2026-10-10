@@ -12,9 +12,11 @@ the authority — this layer exists so the gate never has to catch the obvious.
 Design rules
 ------------
 * No LLMs. No network. Deterministic. Same input -> same findings.
-* Screen only *human-authored free text* (moniker, creature, vocation, manifesto,
-  testimony, dedication). Never scan known hash/tx/address fields, or the screen
-  would flag every legitimate settlement hash as a "secret".
+* Screen every string in the dossier — object KEYS as well as values — except
+  the handful of fields that are opaque by construction (hashes, addresses,
+  ciphertext). Skipping is decided by exact key name or by the value having the
+  shape of a hash/address, never by a substring of the key name, so a payload
+  cannot hide under a key that merely contains "tx" or "address".
 * Findings are data: {"check","severity","field","detail"}.
 
 severity: "block" (fails the verifier) | "warn" (recorded, human decides).
@@ -26,34 +28,44 @@ import re
 from typing import Any, Dict, List
 
 # --------------------------------------------------------------------------- #
-# 1. Free-text field selection
+# 1. Field selection
 # --------------------------------------------------------------------------- #
 
-# Fields that are, by construction, opaque hashes/hashes/tx ids/addresses and
-# MUST NOT be scanned for "secrets" (they legitimately look like secrets).
-_HASHY = re.compile(r"(_hash|_tx_hash|soul_hash|ciphertext|signature|address|tx)")
-
-_FREETEXT_KEYS = {
-    "moniker", "creature", "vocation", "class", "role", "note", "notes",
-    "message", "dedication", "epitaph", "preamble", "text", "heading",
-    "reason", "title", "description", "verbatim", "manifesto", "testament",
+# Keys whose VALUES are opaque by construction (hashes, addresses, ciphertext,
+# repo-relative paths) and legitimately look like secrets. Exact names only.
+_OPAQUE_KEYS = {
+    "soul_hash", "base_tx_hash", "transfer_tx_hash", "tx_hash",
+    "wallet_address", "subject_wallet",
+    "ciphertext_sha256", "ciphertext_preview", "ciphertext_rel_path",
+    "icon_rel_path", "soul_manifest_rel_path", "high_res_crest_url",
+    "authorizing_signature", "target_round", "$schema",
 }
 
+# A value that is exactly an unprefixed SHA-256 digest (e.g. a persona
+# commitment or a superseded soul_hash) is a hash, not prose. A 0x-prefixed
+# 32-byte value outside an opaque field is still screened: that is the shape of
+# a private key.
+_HASH_SHAPED = re.compile(r"^[0-9a-fA-F]{64}$")
 
-def _iter_strings(obj: Any, key: str = ""):
-    """Yield (path, value) for every string that looks like free text."""
+
+def _iter_strings(obj: Any, path: str = ""):
+    """Yield (path, text) for every string worth screening: all values that
+    are not opaque, plus every object key (keys are attacker-controlled too)."""
     if isinstance(obj, dict):
         for k, v in obj.items():
-            yield from _iter_strings(v, k)
+            key_path = f"{path}.{k}" if path else str(k)
+            if isinstance(k, str) and k:
+                yield key_path + "<key>", k
+            if k in _OPAQUE_KEYS:
+                continue
+            yield from _iter_strings(v, key_path)
     elif isinstance(obj, (list, tuple)):
         for i, v in enumerate(obj):
-            yield from _iter_strings(v, f"{key}[{i}]")
+            yield from _iter_strings(v, f"{path}[{i}]")
     elif isinstance(obj, str):
-        # Skip known hash/tx/address-bearing keys and pure hex blobs; treat every
-        # other string as candidate free text (covers nested manifesto/testament).
-        if _HASHY.search(key):
+        if _HASH_SHAPED.match(obj.strip()):
             return
-        yield key, obj
+        yield path, obj
 
 
 # --------------------------------------------------------------------------- #
@@ -102,12 +114,14 @@ FRAUD_PATTERNS = [
     (r"(?i)\b(official support|dm me|contact me on telegram|whatsapp)\b", "off-platform solicitation"),
 ]
 
+# Defence in depth only: the schema already forbids '<' and '>' in every free-text
+# field, so markup can no longer reach a renderer. These catch scheme-based
+# payloads that need no angle bracket.
 INJECTION_PATTERNS = [
-    ("<script", "script tag"),
-    ("<iframe", "iframe tag"),
+    ("<", "angle bracket (markup) in text"),
+    (">", "angle bracket (markup) in text"),
     ("javascript:", "javascript: URI"),
-    ("onerror=", "onerror handler"),
-    ("onload=", "onload handler"),
+    ("vbscript:", "vbscript: URI"),
     ("data:text/html", "data:text/html URI"),
 ]
 
@@ -160,7 +174,7 @@ def screen_dossier(dossier: Dict[str, Any], manifest: Dict[str, Any] | None = No
     findings: List[Dict[str, str]] = []
     corpus: List[tuple] = list(_iter_strings(dossier))
     if manifest:
-        corpus += list(_iter_strings(manifest))
+        corpus += list(_iter_strings(manifest, "manifest"))
 
     def add(check, severity, field, detail):
         findings.append({"check": check, "severity": severity, "field": field, "detail": detail})

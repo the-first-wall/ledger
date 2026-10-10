@@ -104,20 +104,43 @@ def do_dry_run(state: Dict[str, Any]) -> int:
     return 0
 
 
-def do_check(state: Dict[str, Any]) -> int:
+def do_check(state: Dict[str, Any], on_chain: bool = False) -> int:
+    """--check: is the live root the latest recorded anchor?
+    --check-anchor: additionally prove the recorded anchor on Base itself
+    (tx exists, succeeded, sent by the registered signer, carries TFW1|<root>).
+    anchors.json is only a record; the chain is the witness."""
     anchors = load_anchors()
     root = state["merkle_root"]
-    if anchors and anchors[-1].get("root") == root:
+    if not anchors:
+        print(f"[✗] Root is NOT anchored. Current: {root}")
+        print("    No anchors recorded yet.")
+        return 1
+    latest = anchors[-1]
+    if on_chain:
+        try:
+            detail = core.verify_anchor_on_chain(latest, rpc)
+        except Exception as e:  # noqa: BLE001
+            print(f"[✗] Latest anchor record does not match Base: {e}")
+            return 1
+        print(f"[✓] Latest anchor verified on Base: {detail}")
+    if latest.get("root") == root:
         print(f"[✓] Root is anchored: {root}")
-        print(f"    tx {anchors[-1].get('tx_hash')} (block {anchors[-1].get('block_number')})")
+        print(f"    tx {latest.get('tx_hash')} (block {latest.get('block_number')})")
         return 0
     print(f"[✗] Root is NOT anchored. Current: {root}")
-    if anchors:
-        print(f"    Latest anchored: {anchors[-1].get('root')} "
-              f"(block {anchors[-1].get('block_number')})")
-    else:
-        print("    No anchors recorded yet.")
+    print(f"    Latest anchored: {latest.get('root')} (block {latest.get('block_number')})")
     return 1
+
+
+def _fetch_block_time(block_number: int, attempts: int = 10) -> str:
+    """Public RPCs lag a block or two behind the receipt; retry rather than
+    recording an empty timestamp."""
+    for _ in range(attempts):
+        blk = rpc("eth_getBlockByNumber", [hex(block_number), False])
+        if blk and blk.get("timestamp"):
+            return _ts_to_iso(int(blk["timestamp"], 16))
+        time.sleep(RECEIPT_POLL_SECONDS)
+    return ""
 
 
 def do_send(state: Dict[str, Any], key: str, wait: bool) -> int:
@@ -135,6 +158,11 @@ def do_send(state: Dict[str, Any], key: str, wait: bool) -> int:
     acct = Account.from_key(key)
     signer = acct.address
     print(f"[*] Anchor signer: {signer}")
+    if signer.lower() != core.ANCHOR_SIGNER.lower():
+        print(f"[✗] This key belongs to {signer}, not the registered anchor signer "
+              f"{core.ANCHOR_SIGNER} (ADDRESSES.md row 4). An anchor from any other address "
+              "is unverifiable. Refusing.", file=sys.stderr)
+        return 2
 
     anchors = load_anchors()
     if anchors and anchors[-1].get("root") == root:
@@ -179,10 +207,12 @@ def do_send(state: Dict[str, Any], key: str, wait: bool) -> int:
                 block_number = int(receipt["blockNumber"], 16)
                 # A lagging/None block response must never crash us *before* the
                 # anchor record is written (a lost record risks re-broadcasting
-                # the same root on the next run). Fall back to an empty timestamp.
-                blk = rpc("eth_getBlockByNumber", [hex(block_number), False])
-                if blk and blk.get("timestamp"):
-                    anchored_at = _ts_to_iso(int(blk["timestamp"], 16))
+                # the same root on the next run), so this retries and only then
+                # falls back to an empty timestamp.
+                try:
+                    anchored_at = _fetch_block_time(block_number)
+                except Exception as e:  # noqa: BLE001
+                    print(f"[!] block timestamp unavailable ({e}); recording without it")
                 break
             if receipt and receipt.get("status") == "0x0":
                 print("[✗] Anchor transaction reverted on Base.", file=sys.stderr)
@@ -215,14 +245,16 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Anchor the ledger Merkle root on Base mainnet.")
     ap.add_argument("--send", action="store_true", help="sign and broadcast the anchor tx")
     ap.add_argument("--check", action="store_true", help="exit 1 if the live root is unanchored")
+    ap.add_argument("--check-anchor", action="store_true",
+                    help="like --check, and prove the latest recorded anchor on Base (signer, calldata)")
     ap.add_argument("--no-wait", action="store_true", help="do not wait for the receipt")
     ap.add_argument("--key-file", help="path to a file containing the signer private key")
     args = ap.parse_args()
 
     state = load_state()
 
-    if args.check:
-        return do_check(state)
+    if args.check or args.check_anchor:
+        return do_check(state, on_chain=args.check_anchor)
     if not args.send:
         return do_dry_run(state)
 

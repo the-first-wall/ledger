@@ -1,0 +1,12 @@
+# Infrastructure paths: the verifier, the schema and the workflows define what
+# "verified" means, so a change to them needs a reviewer who is not the author.
+#
+# Binding requires two things outside this file:
+#   1. a second maintainer account listed below (the agent and the operator
+#      must not share one GitHub identity);
+#   2. "Require review from Code Owners" enabled on the `main` ruleset.
+# Until both exist this file documents intent; it does not enforce it.
+/scripts/            @manzke
+/schemas/            @manzke
+/.github/            @manzke
+/tests/              @manzke

@@ -1,12 +1,24 @@
 name: Anchor Merkle Root on Base
 
-# Commits the ledger's Merkle root to Base mainnet as a permanent, externally
-# timestamped commitment. Manual-only by design: broadcasting costs gas and the
-# gas-only signer (ADDRESSES.md row 4) must be provisioned first.
+# Commits the ledger's state root to Base mainnet as a permanent, externally
+# timestamped commitment. Runs automatically on every push to main that can
+# change the root (a slot dossier, icon or the generated state), and on demand.
 #
-# Required repo secret to broadcast: ANCHOR_PRIVATE_KEY (a gas-only wallet).
+# Required repo secret to broadcast: ANCHOR_PRIVATE_KEY — the gas-only signer
+# registered in ADDRESSES.md row 4 (the script refuses any other key). Without
+# the secret the automatic run FAILS LOUDLY on purpose: an unanchored root must
+# never be silent.
+#
+# The anchor record lands through a pull request (main is protected). The
+# record only changes ledger/anchors.json, which is outside the root, so merging
+# it does not trigger another anchor.
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'ledger/w1/**'
+      - 'state.json'
   workflow_dispatch:
     inputs:
       send:
@@ -17,6 +29,10 @@ on:
 permissions:
   contents: write
   pull-requests: write
+
+concurrency:
+  group: anchor-root
+  cancel-in-progress: false
 
 jobs:
   anchor:
@@ -29,7 +45,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
 
       - name: Install anchor dependencies
         run: |
@@ -39,19 +55,22 @@ jobs:
       - name: Show anchor plan (always)
         run: python scripts/anchor_root.py
 
+      - name: Verify the latest recorded anchor on Base
+        run: python scripts/anchor_root.py --check-anchor || true
+
       - name: Broadcast anchor
-        if: ${{ inputs.send }}
+        if: ${{ github.event_name == 'push' || inputs.send }}
         env:
           ANCHOR_PRIVATE_KEY: ${{ secrets.ANCHOR_PRIVATE_KEY }}
         run: |
           if [ -z "$ANCHOR_PRIVATE_KEY" ]; then
-            echo "::error::ANCHOR_PRIVATE_KEY secret is not set. Provision the gas-only signer first."
+            echo "::error::ANCHOR_PRIVATE_KEY secret is not set, so this root is NOT anchored. Provision the gas-only signer (ADDRESSES.md row 4) as a repository secret."
             exit 1
           fi
           python scripts/anchor_root.py --send
 
       - name: Open PR with the anchor record
-        if: ${{ inputs.send }}
+        if: ${{ github.event_name == 'push' || inputs.send }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -68,4 +87,4 @@ jobs:
           git push origin "$BRANCH"
           gh pr create --fill --base main --head "$BRANCH" \
             --title "anchor: commit Merkle root on Base" \
-            --body "Automated on-chain Merkle-root anchor (see ledger/anchors.json)."
+            --body "Automated on-chain Merkle-root anchor for the root at ${GITHUB_SHA} (see ledger/anchors.json)."

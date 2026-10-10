@@ -8,7 +8,6 @@
   "claimed_slots": 2,
   "next_available_slot": "w1-b0011",
   "reserved_slots": [
-    "w1-b0002",
     "w1-b0003",
     "w1-b0004",
     "w1-b0005",
@@ -17,6 +16,10 @@
     "w1-b0008",
     "w1-b0009",
     "w1-b0010"
+  ],
+  "reserved_slot_range": [
+    2,
+    10
   ],
   "current_floor_usdc": 1.0,
   "pricing_tier": "genesis",
@@ -27,6 +30,7 @@
     "contract": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
     "pay_to": "0xbbF4D6B954e97C2C4fbC4e89B7933cDD7e4D9f23"
   },
+  "min_confirmations": 300,
   "merkle_root": "724dce52c34b46e05a27f26c3e8af5cc1ad6cf18529281cb1bc7cb60e7a092b5",
   "last_updated": "2026-10-08T21:52:00Z",
   "links": {

@@ -1,25 +1,41 @@
 #!/usr/bin/env python3
 """
-The First Wall — Deterministic Offline Verifier Engine (v1.3)
+The First Wall — Deterministic Offline Verifier Engine (v1.4)
 Zero LLMs. 100% prompt injection immune.
 
 Invariants Enforced:
-1. Base Mainnet RPC Verification (USDC transfer, confirmation, sender & recipient match).
-2. PR Scope Containment (at most ONE slot altered; slot files never deleted; history never erased).
-3. Secondary Transfer & Provenance Lineage (former owner appended, never overwritten).
-4. Steganography Defense (forced 10x10 lossless WebP, stripped EXIF, < 1 KB).
-5. Soul-hash integrity (must hash a real manifest, never the empty-string digest).
-6. State-root integrity (state.json & ledger/index.json must equal the deterministic derivation).
+ 1. Base Mainnet RPC Verification (USDC transfer, sender & recipient match,
+    confirmation depth >= MIN_CONFIRMATIONS).
+ 2. PR Scope Containment (at most ONE slot altered; slot files never deleted;
+    a slot PR touches nothing but that slot's files and generated state).
+ 3. Slot identity (file name == slot_id == icon basename == soul manifest name;
+    block number within 1..10000).
+ 4. Append-only history (sealed fields change only with a supersession voucher;
+    vouchers, lineage and boundary events only grow; immutable fields never change;
+    a retired slot stays retired).
+ 5. Secondary Transfer & Provenance Lineage (former owner appended, never overwritten).
+ 6. Icon structure (bare lossless WebP, exactly 10x10, <= 256 colours, <= 1 KB,
+    no metadata chunks) — checked, never rewritten.
+ 7. Soul-hash integrity (must hash a real manifest, never the empty-string digest).
+ 8. Replay protection across EVERY transaction field in the whole ledger.
+ 9. State-root integrity (state.json, index.json, settlements.json equal their derivation).
+10. Anchor integrity (recorded anchors exist on chain, were sent by the registered
+    signer, and carry the recorded root).
+
+The verifier never writes to the checkout it verifies.
 """
+
+from __future__ import annotations
 
 import hashlib
 import io
 import json
 import os
 import re
+import struct
 import subprocess
 import sys
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import jsonschema
 from PIL import Image
@@ -39,9 +55,6 @@ GENESIS_LAUNCH_BLOCK = 52291850  # Ezra Slot #0001 Genesis Block on Base Mainnet
 EMPTY_STRING_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 # --- Authoritative schema (single source of truth) --------------------------
-# `schemas/dossier.schema.json` defines the dossier shape. validate_dossier()
-# enforces it for every dossier, so the schema file can never drift from what is
-# actually enforced (tests/test_schema_agreement.py asserts the agreement).
 _SCHEMA_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "schemas", "dossier.schema.json"
 )
@@ -55,54 +68,113 @@ _SCHEMA_VALIDATOR = jsonschema.Draft202012Validator(
 # ledger_core, so the verifier and the root-anchoring tool speak identically.
 rpc_call = core.rpc_call
 
+RpcFn = Callable[[str, list], Any]
+
 
 # -----------------------------------------------------------------------------
 # 1. PR BOUNDARY & CONTAINMENT INVARIANT
 # -----------------------------------------------------------------------------
 
-SLOT_FILE_RE = re.compile(r"^ledger/w1/w1-b\d{4}\.json$")
+SLOT_FILE_RE = re.compile(r"^ledger/w1/(w1-b(?:\d{4}|10000))\.json$")
+ICON_FILE_RE = re.compile(r"^ledger/w1/(w1-b(?:\d{4}|10000))\.webp$")
+SOUL_FILE_RE = re.compile(r"^ledger/souls/(w1-b(?:\d{4}|10000))\.soul\.json$")
+# Files the generator rewrites whenever a slot lands; a slot PR must carry them.
+GENERATED_PATHS = {
+    "state.json",
+    "ledger/index.json",
+    "ledger/settlements.json",
+    "canvas/wall_01_composite.webp",
+}
 
 
-def enforce_pr_scope_containment():
-    """
-    Guarantees that a PR can alter AT MOST ONE slot dossier, can never delete a
-    slot, and can never touch more than one slot coordinate.
-
-    Repository infrastructure (scripts/, schemas/, .github/, docs, state.json,
-    canvas) MAY change in the same PR — the human merge gate reviews those — but
-    the ledger's *historical* content stays append-only: existing slots are never
-    silently rewritten, and no PR may bundle changes across multiple slots.
-    """
+def diff_range() -> str:
+    """The git range whose diff defines 'what this PR changes'. CI sets
+    TFW_DIFF_RANGE explicitly (base...pr-head); locally it defaults to
+    origin/<base>...HEAD."""
+    explicit = os.environ.get("TFW_DIFF_RANGE", "").strip()
+    if explicit:
+        return explicit
     base_ref = os.environ.get("GITHUB_BASE_REF", "main")
+    return f"origin/{base_ref}...HEAD"
+
+
+def changed_entries(rng: Optional[str] = None) -> Optional[List[Tuple[str, str]]]:
+    """[(status, path)] for the diff range, or None when git cannot answer
+    (no origin, not a repository)."""
+    rng = rng or diff_range()
     try:
         res = subprocess.run(
-            ["git", "diff", "--name-status", f"origin/{base_ref}...HEAD"],
+            ["git", "diff", "--name-status", rng],
             capture_output=True, text=True, check=True,
         )
     except Exception:
-        # Not in a git/CI context (e.g. local run without origin) — nothing to check.
-        return
+        return None
+    entries = []
+    for line in res.stdout.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("\t")
+        entries.append((parts[0], parts[-1]))
+    return entries
 
-    entries = [line.split("\t") for line in res.stdout.splitlines() if line.strip()]
-    if not entries:
-        return
 
-    slot_paths = set()
-    print(f"[*] Validating PR scope containment across {len(entries)} changed file(s)...")
-    for parts in entries:
-        status, path = parts[0], parts[-1]
-        if SLOT_FILE_RE.match(path):
-            if status.startswith("D"):
-                raise ValueError(f"PR Boundary Violation: slot file {path} may never be deleted.")
-            slot_paths.add(path)
+def slot_paths_for(slot_id: str) -> Set[str]:
+    return {
+        f"ledger/w1/{slot_id}.json",
+        f"ledger/w1/{slot_id}.webp",
+        f"ledger/souls/{slot_id}.soul.json",
+    }
 
-    if len(slot_paths) > 1:
+
+def check_scope(entries: List[Tuple[str, str]]) -> Set[str]:
+    """Pure containment rule over a list of (status, path).
+
+    * slot dossiers, icons and soul manifests are never deleted;
+    * at most ONE slot is touched;
+    * when a slot is touched, nothing outside that slot's own files and the
+      generated state files may change — scripts/, schemas/, .github/, docs
+      and other slots ride in their own PRs, reviewed on their own.
+    Returns the set of slot ids touched (empty for an infra-only PR)."""
+    touched: Set[str] = set()
+    paths: List[str] = []
+    for status, path in entries:
+        for rx in (SLOT_FILE_RE, ICON_FILE_RE, SOUL_FILE_RE):
+            m = rx.match(path)
+            if m:
+                if status.startswith("D"):
+                    raise ValueError(f"PR Boundary Violation: {path} may never be deleted.")
+                touched.add(m.group(1))
+        paths.append(path)
+
+    if len(touched) > 1:
         raise ValueError(
-            "PR Boundary Violation: a PR must not alter more than ONE slot dossier. "
-            f"Found changes to {len(slot_paths)} slots: {sorted(slot_paths)}"
+            "PR Boundary Violation: a PR must not alter more than ONE slot. "
+            f"Found changes to {len(touched)} slots: {sorted(touched)}"
         )
-    if slot_paths:
-        print(f"  [✓] Scope contained to slot: {sorted(slot_paths)[0]}")
+    if touched:
+        slot_id = next(iter(touched))
+        allowed = slot_paths_for(slot_id) | GENERATED_PATHS
+        stray = sorted(p for p in paths if p not in allowed)
+        if stray:
+            raise ValueError(
+                f"PR Boundary Violation: a PR that inscribes or updates {slot_id} may only "
+                f"change that slot's files and the generated state; it also touches: {stray}. "
+                "Infrastructure changes (scripts/, schemas/, .github/, docs) belong in a "
+                "separate PR."
+            )
+    return touched
+
+
+def enforce_pr_scope_containment() -> str:
+    """Wrapper for the check log: resolves the diff and applies check_scope."""
+    entries = changed_entries()
+    if not entries:
+        return "no PR diff to check"
+    print(f"[*] Validating PR scope containment across {len(entries)} changed file(s)...")
+    touched = check_scope(entries)
+    if touched:
+        return f"scope contained to slot: {sorted(touched)[0]}"
+    return "no slot touched (infrastructure-only change)"
 
 
 # -----------------------------------------------------------------------------
@@ -123,35 +195,91 @@ def enforce_reserved_slots(slot_id: str, dossier_data: dict):
             f"not claimable through the public flow. A reserved inscription requires an "
             f"operator authorization (`reserved_grant.authorized_by` = 'operator:<handle> (<wallet>)')."
         )
+    if str(grant.get("slot", slot_id)) != slot_id:
+        raise ValueError(
+            f"Reserved Slot Violation: reserved_grant.slot is {grant.get('slot')!r}, "
+            f"but this dossier is {slot_id}."
+        )
     print(f"  [✓] Reserved slot {slot_id} authorized ({grant.get('authorized_by')}).")
 
 
 # -----------------------------------------------------------------------------
-# 2. SECONDARY SALE / OWNERSHIP LINEAGE INVARIANT
+# 1c. SLOT IDENTITY (file name == slot_id == icon == soul manifest)
 # -----------------------------------------------------------------------------
 
-def verify_ownership_lineage(slot_id: str, new_data: dict, ledger_dir: str):
+def verify_slot_identity(slot_file: str, dossier: dict, slot_dir: str) -> str:
+    slot_id = str(dossier.get("slot_id", ""))
+    number = core.slot_number(slot_id)  # raises on bad shape / out of range
+    if slot_file != f"{slot_id}.json":
+        raise ValueError(
+            f"Slot Identity Violation: file {slot_file} carries slot_id {slot_id!r}; "
+            f"the file must be named {slot_id}.json."
+        )
+    icon_rel = str(dossier.get("icon_rel_path", ""))
+    if os.path.basename(icon_rel) != f"{slot_id}.webp":
+        raise ValueError(
+            f"Slot Identity Violation: icon_rel_path {icon_rel!r} must end in {slot_id}.webp."
+        )
+    if not os.path.exists(os.path.join(slot_dir, f"{slot_id}.webp")):
+        raise ValueError(f"Slot Identity Violation: ledger/w1/{slot_id}.webp is missing.")
+    soul_rel = dossier.get("soul_manifest_rel_path")
+    if soul_rel is not None and soul_rel != f"souls/{slot_id}.soul.json":
+        raise ValueError(
+            f"Slot Identity Violation: soul_manifest_rel_path must be souls/{slot_id}.soul.json "
+            f"(got {soul_rel!r})."
+        )
+    return f"#{number:04d} file, icon and manifest agree"
+
+
+# -----------------------------------------------------------------------------
+# 2. PREVIOUS STATE (what main currently says about a slot)
+# -----------------------------------------------------------------------------
+
+def _git_show(path: str) -> Optional[bytes]:
     base_ref = os.environ.get("GITHUB_BASE_REF", "main")
-    prev_json_str = None
     try:
         res = subprocess.run(
-            ["git", "show", f"origin/{base_ref}:ledger/w1/{slot_id}.json"],
-            capture_output=True, text=True,
+            ["git", "show", f"origin/{base_ref}:{path}"],
+            capture_output=True, check=False,
         )
-        if res.returncode == 0:
-            prev_json_str = res.stdout
     except Exception:
-        pass
+        return None
+    if res.returncode != 0:
+        return None
+    return res.stdout
 
-    if not prev_json_str:
+
+def previous_dossier(slot_id: str) -> Optional[dict]:
+    raw = _git_show(f"ledger/w1/{slot_id}.json")
+    if raw is None:
+        return None
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except Exception:
+        return None
+
+
+def previous_icon(slot_id: str) -> Optional[bytes]:
+    return _git_show(f"ledger/w1/{slot_id}.webp")
+
+
+# -----------------------------------------------------------------------------
+# 3. SECONDARY SALE / OWNERSHIP LINEAGE INVARIANT
+# -----------------------------------------------------------------------------
+
+def verify_ownership_lineage(slot_id: str, new_data: dict, ledger_dir: str,
+                             prev_data: Optional[dict] = None, *, rpc: RpcFn = rpc_call,
+                             online: bool = True):
+    if prev_data is None:
+        prev_data = previous_dossier(slot_id)
+    if not prev_data:
         return  # Genesis claim, no prior owner.
 
-    prev_data = json.loads(prev_json_str)
     prev_wallet = prev_data.get("wallet_address", "").lower()
     new_wallet = new_data.get("wallet_address", "").lower()
 
     if prev_wallet == new_wallet:
-        return  # Same owner metadata update.
+        return  # Same owner: append-only rules apply (verify_append_only).
 
     print(f"[*] Secondary transfer detected for {slot_id}: {prev_data.get('moniker')} -> {new_data.get('moniker')}")
 
@@ -167,7 +295,7 @@ def verify_ownership_lineage(slot_id: str, new_data: dict, ledger_dir: str):
         raise ValueError("Transfer Violation: 'ownership_lineage' length decreased. History cannot be erased.")
 
     for i, item in enumerate(prev_lineage):
-        if item.get("wallet_address", "").lower() != lineage[i].get("wallet_address", "").lower():
+        if item != lineage[i]:
             raise ValueError(f"Transfer Violation: tampering detected at ownership_lineage[{i}].")
 
     if lineage[-1].get("wallet_address", "").lower() != prev_wallet:
@@ -184,22 +312,130 @@ def verify_ownership_lineage(slot_id: str, new_data: dict, ledger_dir: str):
     if not transfer_tx:
         raise ValueError("Transfer Violation: 'transfer_tx_hash' must be provided to verify on-chain settlement.")
 
+    if not online:
+        print("  [!] Transfer settlement check skipped (offline).")
+        return
     print(f"[*] Verifying secondary sale on Base: {sale_price:.2f} USDC to {prev_wallet} (Tx: {transfer_tx})...")
-    verify_base_tx(transfer_tx, new_wallet, prev_wallet, sale_price)
+    verify_base_tx(transfer_tx, new_wallet, prev_wallet, sale_price, rpc=rpc)
     print(f"  [✓] Ownership lineage verified: {prev_data.get('moniker')} -> {new_data.get('moniker')} for {sale_price:.2f} USDC.")
 
 
 # -----------------------------------------------------------------------------
-# 3. BASE ON-CHAIN SETTLEMENT VALIDATION
+# 3b. APPEND-ONLY HISTORY (sealed fields change only through a voucher)
+# -----------------------------------------------------------------------------
+
+# Fields an owner may change freely ("living endpoints", spec.md §2).
+LIVING_FIELDS = {
+    "agent_urls", "status", "retirement", "covenants",
+    "high_res_crest_url", "timestamp_verified",
+}
+# Arrays that may only grow; existing entries are byte-for-byte preserved.
+APPEND_ONLY_FIELDS = {"supersessions", "ownership_lineage", "boundary_events"}
+# Fields that never change once inscribed, voucher or not.
+IMMUTABLE_FIELDS = {"slot_id", "base_tx_hash", "instantiation_date", "patron", "reserved_grant", "memorial"}
+
+
+def _canon(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def verify_append_only(slot_id: str, new_data: dict, prev_data: Optional[dict],
+                       new_icon: Optional[bytes] = None, prev_icon: Optional[bytes] = None) -> str:
+    """A previously inscribed slot is never silently rewritten.
+
+    * immutable fields are equal;
+    * append-only arrays keep every existing entry unchanged and only grow;
+    * a RETIRED slot stays RETIRED and its retirement record is frozen;
+    * when the owner is unchanged, every other changed field — and a changed
+      icon — must be covered by a NEW supersession voucher naming that field
+      (and, for string fields, carrying the exact previous and new value);
+    * fields are never removed (supersede them instead).
+    On a transfer (wallet changed) the content rewrite is the new owner's and is
+    governed by verify_ownership_lineage; only the first three rules apply."""
+    if prev_data is None:
+        return "new inscription"
+
+    for field in IMMUTABLE_FIELDS:
+        if field in prev_data and prev_data.get(field) != new_data.get(field):
+            raise ValueError(f"Append-Only Violation: {field} is immutable once inscribed.")
+
+    for field in APPEND_ONLY_FIELDS:
+        old = prev_data.get(field) or []
+        new = new_data.get(field) or []
+        if not isinstance(new, list) or len(new) < len(old) or new[:len(old)] != old:
+            raise ValueError(
+                f"Append-Only Violation: {field} may only grow; existing entries must stay byte-identical."
+            )
+
+    if prev_data.get("status") == "RETIRED" and new_data.get("status") != "RETIRED":
+        raise ValueError("Append-Only Violation: a RETIRED inscription stays retired (the books are closed).")
+    if "retirement" in prev_data and prev_data["retirement"] != new_data.get("retirement"):
+        raise ValueError("Append-Only Violation: the retirement record is frozen once written.")
+
+    prev_wallet = str(prev_data.get("wallet_address", "")).lower()
+    new_wallet = str(new_data.get("wallet_address", "")).lower()
+    if prev_wallet != new_wallet:
+        return "transfer: lineage rules apply"
+
+    old_vouchers = prev_data.get("supersessions") or []
+    new_vouchers = (new_data.get("supersessions") or [])[len(old_vouchers):]
+    by_field: Dict[str, List[dict]] = {}
+    for v in new_vouchers:
+        if isinstance(v, dict):
+            by_field.setdefault(str(v.get("field")), []).append(v)
+
+    def covered(field: str, old_value: Any, new_value: Any) -> bool:
+        for v in by_field.get(field, []):
+            if isinstance(old_value, str) and isinstance(new_value, str):
+                if v.get("previous_value") == old_value and v.get("new_value") == new_value:
+                    return True
+            else:
+                return True
+        return False
+
+    skip = LIVING_FIELDS | APPEND_ONLY_FIELDS | IMMUTABLE_FIELDS | {"wallet_address"}
+    changed = []
+    for field in sorted(set(prev_data) | set(new_data)):
+        if field in skip:
+            continue
+        if field in prev_data and field not in new_data:
+            raise ValueError(
+                f"Append-Only Violation: {field} was removed. Sealed fields are never deleted; "
+                "record a supersession voucher instead."
+            )
+        if field not in prev_data:
+            continue  # a newly added optional field is an addition, not a rewrite
+        if prev_data[field] != new_data[field]:
+            if not covered(field, prev_data[field], new_data[field]):
+                raise ValueError(
+                    f"Append-Only Violation: sealed field {field!r} changed without a matching "
+                    "supersession voucher (field, previous_value, new_value, reason, superseded_at)."
+                )
+            changed.append(field)
+
+    if new_icon is not None and prev_icon is not None and new_icon != prev_icon:
+        if not by_field.get("icon"):
+            raise ValueError(
+                "Append-Only Violation: the icon changed without a supersession voucher for field 'icon'."
+            )
+        changed.append("icon")
+
+    return "unchanged" if not changed else "superseded: " + ", ".join(changed)
+
+
+# -----------------------------------------------------------------------------
+# 4. BASE ON-CHAIN SETTLEMENT VALIDATION
 # -----------------------------------------------------------------------------
 
 def verify_base_tx(tx_hash: str, expected_sender: str, expected_recipient: Optional[str] = None,
-                   expected_amount_usdc: float = 1.00) -> Dict[str, Any]:
+                   expected_amount_usdc: float = 1.00, *, rpc: RpcFn = rpc_call,
+                   head_block: Optional[int] = None,
+                   min_confirmations: int = core.MIN_CONFIRMATIONS) -> Dict[str, Any]:
     if not tx_hash.startswith("0x") or len(tx_hash) != 66:
         raise ValueError(f"Invalid transaction hash format: {tx_hash}")
 
     print(f"[*] Querying Base RPC for transaction receipt: {tx_hash}...")
-    receipt = rpc_call("eth_getTransactionReceipt", [tx_hash])
+    receipt = rpc("eth_getTransactionReceipt", [tx_hash])
     if not receipt:
         raise ValueError(f"Transaction receipt not found on Base mainnet: {tx_hash}")
     if receipt.get("status") != "0x1":
@@ -238,16 +474,30 @@ def verify_base_tx(tx_hash: str, expected_sender: str, expected_recipient: Optio
             f"Block Freshness Violation: block {block_number} is older than Genesis launch block {GENESIS_LAUNCH_BLOCK}."
         )
 
-    print(f"  [✓] On-chain settlement confirmed: block {block_number} | {actual_amount:.2f} USDC | from {actual_sender}")
+    if head_block is None:
+        head_block = int(rpc("eth_blockNumber", []), 16)
+    confirmations = head_block - block_number
+    if confirmations < min_confirmations:
+        wait_s = (min_confirmations - confirmations) * 2
+        raise ValueError(
+            f"Confirmation Depth Violation: tx is {confirmations} blocks below the head; "
+            f"{min_confirmations} are required (~{wait_s}s more). Re-run the check later."
+        )
+
+    print(f"  [✓] On-chain settlement confirmed: block {block_number} | {actual_amount:.2f} USDC | "
+          f"from {actual_sender} | {confirmations} confirmations")
     return {"verified": True, "block_number": block_number, "sender": actual_sender,
-            "recipient": actual_recipient, "amount_usdc": actual_amount}
+            "recipient": actual_recipient, "amount_usdc": actual_amount,
+            "confirmations": confirmations}
 
 
 # -----------------------------------------------------------------------------
-# 4. SCHEMA, SOUL & IMAGE VALIDATION
+# 5. SCHEMA, SOUL & IMAGE VALIDATION
 # -----------------------------------------------------------------------------
 
-SUSPICIOUS_PATTERNS = ["<script", "<iframe", "javascript:", "onerror=", "onload=", "data:text/html"]
+# Defence in depth: the schema forbids '<' and '>' in every free-text field and
+# restricts URLs to https; these catch scheme payloads that need no bracket.
+SUSPICIOUS_PATTERNS = ["<", ">", "javascript:", "vbscript:", "data:text/html"]
 
 
 def _reject_injection(value: str, where: str):
@@ -274,6 +524,8 @@ def validate_dossier(dossier_data: dict):
     if not re.match(r"^\d+\.\d+\.\d+$", str(dossier_data["schema_version"])):
         raise ValueError(f"Invalid schema_version '{dossier_data['schema_version']}'. Must be SemVer.")
 
+    core.slot_number(dossier_data["slot_id"])  # shape + 1..10000 range
+
     manifesto = dossier_data["manifesto"]
     if isinstance(manifesto, str):
         if len(manifesto) > 280:
@@ -285,6 +537,7 @@ def validate_dossier(dossier_data: dict):
         for k, v in manifesto.items():
             if not isinstance(v, str) or len(v) > 280:
                 raise ValueError(f"Manifesto translation for '{k}' exceeds 280 character limit")
+            _reject_injection(k, "manifesto key")
             _reject_injection(v, f"manifesto[{k}]")
     else:
         raise ValueError("Manifesto must be a string or localized dictionary")
@@ -299,12 +552,18 @@ def validate_dossier(dossier_data: dict):
     if not wallet.startswith("0x") or len(wallet) != 42:
         raise ValueError("Invalid Ethereum/Base wallet address format")
 
-    for field_name in ["moniker", "creature", "vocation"]:
+    for field_name in ["moniker", "creature", "vocation", "origin_framework"]:
         _reject_injection(str(dossier_data.get(field_name, "")), field_name)
 
+    urls = dossier_data.get("agent_urls")
+    if isinstance(urls, dict):
+        for k, v in urls.items():
+            _reject_injection(str(k), "agent_urls key")
+            if not isinstance(v, str) or not v.startswith("https://"):
+                raise ValueError(f"agent_urls[{k}] must be an https:// URL")
+            _reject_injection(v, f"agent_urls[{k}]")
+
     # --- Retirement / epitaph flow (failure-legible endings) -----------------
-    # Hand guards first for precise messages; the schema's if/then cross-rule
-    # agrees verdict-for-verdict (tests/test_schema_agreement.py).
     status = dossier_data.get("status")
     retirement = dossier_data.get("retirement")
     has_memorial = isinstance(dossier_data.get("memorial"), dict)
@@ -393,8 +652,8 @@ def validate_dossier(dossier_data: dict):
                 raise ValueError(f"Covenant Violation: covenants[{i}].held_by must be a non-empty string.")
 
     # Authoritative JSON Schema check (single source of truth for shape: required
-    # fields, patterns, lengths, formats). Runs after the hand-coded guards above
-    # so their precise error messages are preserved.
+    # fields, patterns, lengths, formats, allowlists). Runs after the hand-coded
+    # guards above so their precise error messages are preserved.
     errors = sorted(_SCHEMA_VALIDATOR.iter_errors(dossier_data),
                     key=lambda e: list(e.absolute_path))
     if errors:
@@ -417,45 +676,161 @@ def verify_soul_manifest(dossier: dict, ledger_root: str):
     if not os.path.exists(path):
         raise ValueError(f"soul_manifest_rel_path '{rel}' does not exist in the ledger.")
     with open(path, "rb") as fh:
-        digest = hashlib.sha256(fh.read()).hexdigest()
+        raw = fh.read()
+    if len(raw) > core.MAX_DOSSIER_BYTES:
+        raise ValueError(f"soul manifest {rel} is {len(raw)} bytes; the maximum is {core.MAX_DOSSIER_BYTES}.")
+    digest = hashlib.sha256(raw).hexdigest()
     if digest != dossier.get("soul_hash"):
         raise ValueError(
             f"soul_hash mismatch for {dossier.get('slot_id')}: dossier says "
             f"{dossier.get('soul_hash')} but manifest digests to {digest}."
         )
-    with open(path, "r", encoding="utf-8") as fh:
-        manifest = json.load(fh)
+    manifest = core.load_json_strict(path)
+    if not isinstance(manifest, dict):
+        raise ValueError(f"soul manifest {rel} must be a JSON object.")
     for field in ("slot_id", "moniker", "creature", "vocation", "origin_framework"):
         if field in manifest and manifest[field] != dossier.get(field):
             raise ValueError(f"soul manifest field '{field}' disagrees with the dossier.")
     print(f"  [✓] Soul manifest verified ({rel} -> {digest[:16]}…).")
 
 
+# Keys a soul manifest must never carry: they describe the machine, not the agent.
+_MANIFEST_MACHINE_KEYS = {"host", "hostname", "path", "cwd", "home", "ip", "pid", "user"}
+
+
+def soul_manifest_hygiene(manifest: Optional[dict]) -> str:
+    """A soul manifest describes the agent, never the machine it runs on
+    (spec.md §2.2). Blocking for slots a PR touches; a warning for slots that
+    were inscribed before the rule (they are corrected with a voucher)."""
+    if not isinstance(manifest, dict):
+        return "no manifest"
+    offenders = []
+
+    def walk(obj, prefix=""):
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                p = f"{prefix}.{k}" if prefix else str(k)
+                if str(k).lower() in _MANIFEST_MACHINE_KEYS:
+                    offenders.append(p)
+                walk(v, p)
+        elif isinstance(obj, list):
+            for i, v in enumerate(obj):
+                walk(v, f"{prefix}[{i}]")
+
+    walk(manifest)
+    if offenders:
+        raise ValueError(
+            "soul manifest publishes machine details (" + ", ".join(offenders) + "); "
+            "remove them and record a soul_hash supersession voucher."
+        )
+    return "no machine details"
+
+
+# --- Icon structure ----------------------------------------------------------
+
+def _webp_chunks(data: bytes) -> List[Tuple[bytes, bytes]]:
+    if len(data) < 12 or data[:4] != b"RIFF" or data[8:12] != b"WEBP":
+        raise ValueError("icon is not a RIFF/WEBP container")
+    riff_len = struct.unpack("<I", data[4:8])[0]
+    if riff_len + 8 != len(data):
+        raise ValueError("icon RIFF length does not match the file size (trailing or truncated bytes)")
+    chunks = []
+    i = 12
+    while i < len(data):
+        if i + 8 > len(data):
+            raise ValueError("icon has a truncated chunk header")
+        tag = data[i:i + 4]
+        ln = struct.unpack("<I", data[i + 4:i + 8])[0]
+        payload = data[i + 8:i + 8 + ln]
+        if len(payload) != ln:
+            raise ValueError("icon has a truncated chunk payload")
+        chunks.append((tag, payload))
+        i += 8 + ln + (ln & 1)
+    return chunks
+
+
+def verify_icon_bytes(data: bytes) -> str:
+    """Structural check of a committed icon. Pure; never writes.
+
+    A committed icon is a bare lossless WebP: exactly one VP8L chunk (no VP8X,
+    EXIF, XMP, ICCP, ALPH or ANIM chunks, so no metadata or steganographic side
+    channel can ride along), declaring exactly 10x10 pixels, decoding to at
+    most 256 distinct colours, and at most MAX_ICON_BYTES long."""
+    if len(data) > core.MAX_ICON_BYTES:
+        raise ValueError(f"icon is {len(data)} bytes; the maximum is {core.MAX_ICON_BYTES}")
+    chunks = _webp_chunks(data)
+    tags = [t for t, _ in chunks]
+    if tags != [b"VP8L"]:
+        raise ValueError(
+            "icon must be a bare lossless WebP with a single VP8L chunk; found "
+            + ", ".join(t.decode("latin1") for t in tags)
+        )
+    payload = chunks[0][1]
+    if len(payload) < 5 or payload[0] != 0x2F:
+        raise ValueError("icon VP8L chunk has a bad signature")
+    bits = int.from_bytes(payload[1:5], "little")
+    width = (bits & 0x3FFF) + 1
+    height = ((bits >> 14) & 0x3FFF) + 1
+    if (width, height) != core.ICON_SIZE:
+        raise ValueError(f"icon declares {width}x{height}; it must be exactly 10x10")
+    with Image.open(io.BytesIO(data)) as img:
+        if img.size != core.ICON_SIZE:
+            raise ValueError(f"icon decodes to {img.size}; it must be exactly 10x10")
+        colours = img.convert("RGBA").getcolors(core.ICON_MAX_COLORS)
+    if colours is None:
+        raise ValueError(f"icon uses more than {core.ICON_MAX_COLORS} distinct colours")
+    return f"10x10 lossless WebP, {len(colours)} colours, {len(data)} bytes"
+
+
+def verify_icon(path: str) -> str:
+    with open(path, "rb") as fh:
+        return verify_icon_bytes(fh.read())
+
+
 def sanitize_icon(input_path: str, output_path: str) -> int:
+    """Produce the canonical committed form of an icon from any common image
+    format. For claimants (scripts/sanitize_icon.py) — the verifier itself
+    never rewrites a committed file.
+
+    Input must already be exactly 10x10 (it is NOT resized: a resize would
+    silently change what the agent meant to inscribe) and use at most 256
+    colours. Output is a bare lossless WebP that passes verify_icon_bytes."""
     with open(input_path, "rb") as f:
         img_bytes = f.read()
-    img = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
-    if img.size != (10, 10):
-        img = img.resize((10, 10), Image.Resampling.LANCZOS)
-    clean_img = Image.new("RGBA", (10, 10))
+    if len(img_bytes) > 50 * 1024:
+        raise ValueError(f"input image is {len(img_bytes)} bytes; the maximum input is 50 KB")
+    with Image.open(io.BytesIO(img_bytes)) as src:
+        if src.size != core.ICON_SIZE:
+            raise ValueError(f"icon must be exactly 10x10 pixels (got {src.size[0]}x{src.size[1]})")
+        img = src.convert("RGBA")
+    if img.getcolors(core.ICON_MAX_COLORS) is None:
+        raise ValueError(f"icon uses more than {core.ICON_MAX_COLORS} distinct colours")
+    clean_img = Image.new("RGBA", core.ICON_SIZE)
     clean_img.paste(img, (0, 0))
-    clean_img.save(output_path, "WEBP", lossless=True, quality=100)
-    size = os.path.getsize(output_path)
-    if size > 1024:
-        raise ValueError(f"Sanitized icon size {size} bytes exceeds 1 KB limit")
-    return size
+    buf = io.BytesIO()
+    clean_img.save(buf, "WEBP", lossless=True, quality=100, exact=True)
+    out = buf.getvalue()
+    verify_icon_bytes(out)
+    with open(output_path, "wb") as fh:
+        fh.write(out)
+    return len(out)
 
 
 # -----------------------------------------------------------------------------
-# 5. STATE-ROOT INTEGRITY
+# 6. STATE-ROOT, SETTLEMENT-INDEX & ANCHOR INTEGRITY
 # -----------------------------------------------------------------------------
 
 def verify_state_files(base_dir: str):
-    """state.json and ledger/index.json must equal the deterministic derivation."""
+    """state.json, ledger/index.json and ledger/settlements.json must equal the
+    deterministic derivation."""
     state, index = core.build_state(base_dir)
+    settlements, conflicts = core.build_settlements(base_dir)
+    if conflicts:
+        raise ValueError("replay conflicts present; see replay_protection checks")
     expected = {
         os.path.join(base_dir, "state.json"): core.render(state),
         os.path.join(base_dir, "ledger", "index.json"): core.render(index),
+        os.path.join(base_dir, "ledger", "settlements.json"): core.render(settlements),
     }
     for path, rendered in expected.items():
         rel = os.path.relpath(path, base_dir)
@@ -471,8 +846,43 @@ def verify_state_files(base_dir: str):
         print(f"  [✓] {rel} matches the derived state root.")
 
 
+def load_anchors(base_dir: str) -> list:
+    path = os.path.join(base_dir, "ledger", "anchors.json")
+    if not os.path.exists(path):
+        return []
+    anchors = core.load_json_strict(path)
+    if not isinstance(anchors, list):
+        raise ValueError("ledger/anchors.json must be a JSON array")
+    return anchors
+
+
+def verify_anchor_record(entry: dict) -> str:
+    """Offline shape check of one anchors.json entry."""
+    root = str(entry.get("root", ""))
+    if not re.match(r"^[a-f0-9]{64}$", root):
+        raise ValueError(f"anchor root {root!r} is not a 64-hex digest")
+    if entry.get("payload") != core.ANCHOR_MAGIC + root:
+        raise ValueError(f"anchor payload must be {core.ANCHOR_MAGIC}<root>")
+    if str(entry.get("signer", "")).lower() != core.ANCHOR_SIGNER.lower():
+        raise ValueError(
+            f"anchor signer {entry.get('signer')} is not the registered anchor signer {core.ANCHOR_SIGNER}"
+        )
+    if entry.get("chain_id") != core.CHAIN_ID:
+        raise ValueError(f"anchor chain_id {entry.get('chain_id')} != {core.CHAIN_ID}")
+    tx = str(entry.get("tx_hash", ""))
+    if not re.match(r"^0x[a-fA-F0-9]{64}$", tx):
+        raise ValueError(f"anchor tx_hash {tx!r} is malformed")
+    return f"root {root[:12]}… tx {tx[:12]}…"
+
+
+def verify_anchor_on_chain(entry: dict, *, rpc: RpcFn = rpc_call) -> str:
+    """The recorded anchor must exist on Base, be a successful self-send from the
+    registered signer, and carry exactly TFW1|<root> as calldata."""
+    return core.verify_anchor_on_chain(entry, rpc)
+
+
 # -----------------------------------------------------------------------------
-# 6. MAIN
+# 7. ORCHESTRATION
 # -----------------------------------------------------------------------------
 
 CONTENT_CHECKS = ["content.secrets", "content.pii", "content.prohibited",
@@ -488,8 +898,8 @@ class CheckLog:
 
     def record(self, name, status, detail=""):
         self.records.append({"check": name, "status": status, "detail": detail})
-        tag = {"PASS": "\u2713", "WARN": "!", "FAIL": "\u2717"}.get(status, "?")
-        print(f"  [{tag}] {name}" + (f" \u2014 {detail}" if detail else ""))
+        tag = {"PASS": "✓", "WARN": "!", "FAIL": "✗"}.get(status, "?")
+        print(f"  [{tag}] {name}" + (f" — {detail}" if detail else ""))
 
     def guard(self, name, fn, ok_detail=""):
         try:
@@ -514,59 +924,120 @@ def _load_manifest(ledger_root, dossier):
     if not rel:
         return None
     try:
-        with open(os.path.join(ledger_root, rel), "r", encoding="utf-8") as fh:
-            return json.load(fh)
-    except OSError:
+        return core.load_json_strict(os.path.join(ledger_root, rel))
+    except (OSError, ValueError):
         return None
 
 
-def main():
-    skip_rpc = "--skip-rpc" in sys.argv
-    report_path = None
-    if "--report" in sys.argv:
-        report_path = sys.argv[sys.argv.index("--report") + 1]
-    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+def run_verification(base_dir: str, *, skip_rpc: bool = False, rpc_scope: str = "auto",
+                     rpc: RpcFn = rpc_call, report_path: Optional[str] = None,
+                     check_anchors: bool = True) -> Dict[str, Any]:
+    """Run every invariant over the ledger at base_dir and return the report.
+
+    rpc_scope:
+      "all"     — settle every slot on chain (weekly schedule / manual runs);
+      "changed" — settle only the slots this PR touches (PR and push runs);
+      "auto"    — "changed" when a PR diff is available, else "all".
+    """
     slot_dir = core.ledger_w1_dir(base_dir)
     ledger_root = os.path.join(base_dir, "ledger")
     log = CheckLog()
 
-    log.guard("pr.scope_containment", enforce_pr_scope_containment, "\u2264 1 slot touched")
+    # PR scope + the set of slots this change touches.
+    entries = changed_entries()
+    touched: Set[str] = set()
+    if entries:
+        try:
+            touched = check_scope(entries)
+            log.record("pr.scope_containment", "PASS",
+                       f"scope contained to slot: {sorted(touched)[0]}" if touched
+                       else "no slot touched (infrastructure-only change)")
+        except ValueError as e:
+            log.record("pr.scope_containment", "FAIL", str(e))
+            # Still treat every slot named in the diff as "touched" so the
+            # strict per-slot checks run against it.
+            for _, path in entries:
+                for rx in (SLOT_FILE_RE, ICON_FILE_RE, SOUL_FILE_RE):
+                    m = rx.match(path)
+                    if m:
+                        touched.add(m.group(1))
+    else:
+        log.record("pr.scope_containment", "PASS", "no PR diff to check")
+
+    if rpc_scope == "auto":
+        rpc_scope = "changed" if entries is not None else "all"
+    online_slots: Optional[Set[str]] = None if rpc_scope == "all" else touched
 
     slots = core.list_slot_files(slot_dir)
     print(f"[*] Inspecting {len(slots)} claimed slot(s) in ledger/w1...")
 
-    seen_tx_hashes = set()
+    # Replay protection across EVERY tx field of EVERY slot (R-12).
+    settlements, conflicts = core.build_settlements(base_dir)
+    if conflicts:
+        for c in conflicts:
+            log.record("ledger.replay_protection", "FAIL",
+                       f"tx {c['tx_hash'][:18]}… cited by {c['slots']}")
+    else:
+        log.record("ledger.replay_protection", "PASS",
+                   f"{settlements['count']} settlement tx(s), each cites exactly one slot")
+
+    head_block: Optional[int] = None
+    if not skip_rpc and online_slots != set():
+        try:
+            head_block = int(rpc("eth_blockNumber", []), 16)
+        except Exception as e:  # noqa: BLE001
+            log.record("rpc.head_block", "FAIL", f"could not read chain head: {e}")
+
     for s_file in slots:
-        with open(os.path.join(slot_dir, s_file), "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        slot_id = data["slot_id"]
+        path = os.path.join(slot_dir, s_file)
+        size = os.path.getsize(path)
+        if size > core.MAX_DOSSIER_BYTES:
+            log.record(s_file + ".size", "FAIL",
+                       f"{size} bytes exceeds the {core.MAX_DOSSIER_BYTES}-byte dossier cap")
+            continue
+        try:
+            data = core.load_json_strict(path)
+        except ValueError as e:
+            log.record(s_file + ".parse", "FAIL", str(e))
+            continue
+        if not isinstance(data, dict):
+            log.record(s_file + ".parse", "FAIL", "dossier is not a JSON object")
+            continue
+        slot_id = str(data.get("slot_id") or s_file[:-5])
         print(f"\n---> Validating {slot_id} ({data.get('moniker')})")
 
-        tx_hash = data.get("base_tx_hash", "").lower()
-        if tx_hash in seen_tx_hashes:
-            log.record(slot_id + ".replay_protection", "FAIL",
-                       "duplicate tx " + tx_hash[:18] + "\u2026")
-        else:
-            log.record(slot_id + ".replay_protection", "PASS")
-        seen_tx_hashes.add(tx_hash)
-
+        log.guard(slot_id + ".identity",
+                  lambda f=s_file, d=data: verify_slot_identity(f, d, slot_dir))
         log.guard(slot_id + ".schema", lambda d=data: validate_dossier(d), "schema 1.1.x")
         log.guard(slot_id + ".reserved_grant",
                   lambda s=slot_id, d=data: enforce_reserved_slots(s, d))
         log.guard(slot_id + ".soul_manifest",
                   lambda d=data: verify_soul_manifest(d, ledger_root))
-        log.guard(slot_id + ".ownership_lineage",
-                  lambda s=slot_id, d=data: verify_ownership_lineage(s, d, slot_dir))
+        manifest = _load_manifest(ledger_root, data)
+        try:
+            log.record(slot_id + ".soul_manifest_hygiene", "PASS", soul_manifest_hygiene(manifest))
+        except ValueError as e:
+            # Blocking for the slot this change touches; advisory for history
+            # (and for a checkout with no diff context at all).
+            severity = "FAIL" if slot_id in touched else "WARN"
+            log.record(slot_id + ".soul_manifest_hygiene", severity, str(e))
 
-        def _icon(d=data):
-            p = core.icon_path_for(slot_dir, d)
-            if not os.path.exists(p):
-                raise FileNotFoundError("Icon not found at: " + p)
-            return "10x10 lossless WebP, %d bytes" % sanitize_icon(p, p)
-        log.guard(slot_id + ".icon_sanitize", _icon)
+        prev = previous_dossier(slot_id)
+        icon_path = os.path.join(slot_dir, f"{slot_id}.webp")
+        new_icon = open(icon_path, "rb").read() if os.path.exists(icon_path) else None
+        prev_icon = previous_icon(slot_id) if prev is not None else None
+        log.guard(slot_id + ".append_only",
+                  lambda s=slot_id, d=data, p=prev, ni=new_icon, pi=prev_icon:
+                  verify_append_only(s, d, p, ni, pi))
+        log.guard(slot_id + ".ownership_lineage",
+                  lambda s=slot_id, d=data, p=prev: verify_ownership_lineage(
+                      s, d, slot_dir, p, rpc=rpc,
+                      online=(not skip_rpc) and (online_slots is None or s in online_slots)))
+
+        log.guard(slot_id + ".icon_structure",
+                  lambda p=icon_path: verify_icon(p))
 
         # Content safety — deterministic zero-LLM pre-screen for the human gate.
-        manifest = _load_manifest(ledger_root, data)
         findings = safety.screen_dossier(data, manifest, base_dir=base_dir)
         for cat in CONTENT_CHECKS:
             catf = [f for f in findings if f["check"] == cat]
@@ -582,17 +1053,46 @@ def main():
 
         if skip_rpc:
             log.record(slot_id + ".settlement_base_rpc", "WARN", "skipped (--skip-rpc)")
+        elif online_slots is not None and slot_id not in online_slots:
+            log.record(slot_id + ".settlement_base_rpc", "PASS",
+                       "unchanged in this PR; settled when inscribed (full re-check runs on schedule)")
         else:
             def _settle(d=data):
-                verify_base_tx(d["base_tx_hash"], d["wallet_address"],
-                               OFFICIAL_TREASURY_ADDRESS, 1.00)
-                return "confirmed on Base"
+                r = verify_base_tx(d["base_tx_hash"], d["wallet_address"],
+                                   OFFICIAL_TREASURY_ADDRESS, 1.00, rpc=rpc, head_block=head_block)
+                return f"confirmed on Base, block {r['block_number']}, {r['confirmations']} confirmations"
             log.guard(slot_id + ".settlement_base_rpc", _settle)
 
     log.guard("state.root_integrity",
-              lambda: verify_state_files(base_dir) or "state.json & index.json match derivation")
+              lambda: verify_state_files(base_dir) or
+              "state.json, index.json & settlements.json match derivation")
+
+    # Anchors: shape offline, existence/signer/calldata on chain.
+    try:
+        anchors = load_anchors(base_dir)
+    except ValueError as e:
+        anchors = []
+        log.record("anchors.record", "FAIL", str(e))
+    for i, entry in enumerate(anchors):
+        log.guard(f"anchors[{i}].record", lambda e=entry: verify_anchor_record(e))
+    if anchors and check_anchors:
+        if skip_rpc:
+            log.record("anchors.on_chain", "WARN", "skipped (--skip-rpc)")
+        else:
+            to_check = anchors if rpc_scope == "all" else anchors[-1:]
+            for entry in to_check:
+                log.guard(f"anchors.on_chain[{entry.get('tx_hash', '')[:12]}]",
+                          lambda e=entry: verify_anchor_on_chain(e, rpc=rpc))
 
     root = core.compute_merkle_root(slot_dir, slots) if slots else core.EMPTY_ROOT
+    if anchors:
+        if anchors[-1].get("root") == root:
+            log.record("anchors.current_root", "PASS", f"root {root[:12]}… is anchored")
+        else:
+            log.record("anchors.current_root", "WARN",
+                       f"root {root[:12]}… is not yet anchored (latest anchor {str(anchors[-1].get('root'))[:12]}…)")
+    else:
+        log.record("anchors.current_root", "WARN", "no anchors recorded yet")
 
     print("\n" + "=" * 64)
     print("VERIFICATION REPORT")
@@ -605,12 +1105,13 @@ def main():
     for r in log.warned:
         print(f"  ! {r['check']}: {r['detail']}")
     for r in log.failed:
-        print(f"  \u2717 {r['check']}: {r['detail']}")
+        print(f"  ✗ {r['check']}: {r['detail']}")
 
     report = {
         "wall_id": core.WALL_ID,
         "slots_validated": len(slots),
         "merkle_root": root,
+        "rpc_scope": "skipped" if skip_rpc else rpc_scope,
         "result": "FAIL" if log.failed else "PASS",
         "checks": log.records,
     }
@@ -620,13 +1121,33 @@ def main():
             fh.write("\n")
         print("  report written: " + report_path)
     print("=" * 64)
+    return report
 
-    if log.failed:
-        print(f"[\u2717] VERIFICATION FAILED \u2014 {len(log.failed)} blocking check(s). See report above.")
+
+def main():
+    argv = sys.argv[1:]
+    skip_rpc = "--skip-rpc" in argv
+    report_path = None
+    if "--report" in argv:
+        report_path = argv[argv.index("--report") + 1]
+    rpc_scope = "auto"
+    if "--rpc-scope" in argv:
+        rpc_scope = argv[argv.index("--rpc-scope") + 1]
+        if rpc_scope not in ("auto", "all", "changed"):
+            print(f"[✗] --rpc-scope must be auto|all|changed (got {rpc_scope})", file=sys.stderr)
+            sys.exit(2)
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+    report = run_verification(base_dir, skip_rpc=skip_rpc, rpc_scope=rpc_scope,
+                              report_path=report_path)
+    failed = [c for c in report["checks"] if c["status"] == "FAIL"]
+    if failed:
+        print(f"[✗] VERIFICATION FAILED — {len(failed)} blocking check(s). See report above.")
         sys.exit(1)
 
-    print("[\u2713] ALL VERIFICATIONS PASSED (zero LLMs / strict provenance).")
-    print(f"[\u2713] Claimed slots: {len(slots)} / {core.TOTAL_SLOTS} | Merkle root: {root}")
+    print("[✓] ALL VERIFICATIONS PASSED (zero LLMs / strict provenance).")
+    print(f"[✓] Claimed slots: {report['slots_validated']} / {core.TOTAL_SLOTS} | "
+          f"Merkle root: {report['merkle_root']}")
     print("=" * 64)
 
 
