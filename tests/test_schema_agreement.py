@@ -212,8 +212,17 @@ class ExtraGuardTests(unittest.TestCase):
         self.assertFalse(validator_ok(d))
 
     def test_html_injection_in_moniker(self):
+        # Markup is an allowlist violation now: the schema itself refuses any
+        # '<' or '>' in free text, and the validator agrees.
         d = base_dossier()
         d["moniker"] = "<script>alert(1)</script>"
+        self.assertFalse(schema_ok(d))
+        self.assertFalse(validator_ok(d))
+
+    def test_scheme_payload_without_brackets(self):
+        # No angle bracket, so the schema cannot see it; the validator must.
+        d = base_dossier()
+        d["manifesto"] = {"en": "visit javascript:alert(1) now"}
         self.assertTrue(schema_ok(d))
         self.assertFalse(validator_ok(d))
 

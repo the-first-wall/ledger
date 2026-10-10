@@ -1,44 +1,94 @@
 name: Verify Inscription & Merkle State
 
+# Verification ALWAYS runs with the verifier, schema and tests from the base
+# branch. A pull request contributes only its ledger data (dossiers, icons, soul
+# manifests, generated state); nothing executable is ever taken from the PR, so
+# a claim PR cannot change the rules it is checked against. Infrastructure
+# changes (scripts/, schemas/, .github/) ride in their own PRs, where the
+# containment rule forbids touching a slot at the same time.
 on:
-  pull_request:
-    paths:
-      - 'ledger/**'
-      - 'schemas/**'
-      - 'scripts/**'
-      - 'state.json'
-      - 'spec.json'
-      - '.github/workflows/**'
+  pull_request_target:
+    types: [opened, synchronize, reopened]
   push:
     branches: [main]
+  schedule:
+    - cron: '17 3 * * 1'   # weekly: full on-chain re-verification of every slot and anchor
+  workflow_dispatch:
+    inputs:
+      rpc_scope:
+        description: "Settle every slot on chain (all) or only changed ones (changed)"
+        type: choice
+        options: [all, changed]
+        default: all
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   verify:
-    name: Deterministic Settlement & Schema Verifier
+    name: Verify from base (required)
     runs-on: ubuntu-latest
     steps:
-      - name: Check out repository
+      - name: Check out the base branch (trusted code)
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # full history so the PR-containment diff can resolve origin/main
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          fetch-depth: 0   # origin/main is needed for the previous-state lookups
+
+      - name: Overlay the pull request's ledger DATA (never its code)
+        if: github.event_name == 'pull_request_target'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"
+          test "$(git rev-parse refs/remotes/pr/head)" = "$PR_HEAD"
+          BASE="$(git rev-parse HEAD)"
+          # Only data paths are taken from the PR. scripts/, schemas/, tests/,
+          # .github/ and docs stay exactly as they are on the base branch.
+          git diff --no-renames --name-status "$BASE" refs/remotes/pr/head > /tmp/changed.tsv
+          while IFS=$'\t' read -r status path; do
+            case "$path" in
+              ledger/*|state.json|canvas/*) ;;
+              *) echo "  (ignoring non-data change: $status $path)"; continue ;;
+            esac
+            if [ "${status:0:1}" = "D" ]; then
+              rm -f -- "$path"
+            else
+              git checkout refs/remotes/pr/head -- "$path"
+            fi
+            echo "  overlaid: $status $path"
+          done < /tmp/changed.tsv
+          echo "TFW_DIFF_RANGE=${BASE}...refs/remotes/pr/head" >> "$GITHUB_ENV"
+
+      - name: Define the change range for a push to main
+        if: github.event_name == 'push'
+        run: echo "TFW_DIFF_RANGE=${{ github.event.before }}...${{ github.sha }}" >> "$GITHUB_ENV"
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
 
-      - name: Install verification dependencies
+      - name: Install verification dependencies (pinned)
         run: |
           python -m pip install --upgrade pip
-          pip install Pillow jsonschema rfc3339-validator
+          pip install "Pillow==12.3.0" "jsonschema==4.26.0" "rfc3339-validator==0.1.4" "rfc3987==1.3.8"
 
-      - name: Run test suite
+      - name: Run test suite (base branch tests)
         run: |
           python -m unittest discover -s tests -v
 
       - name: Run Deterministic Offline Verifier
+        env:
+          RPC_SCOPE: ${{ (github.event_name == 'schedule' && 'all') || (github.event_name == 'workflow_dispatch' && inputs.rpc_scope) || 'changed' }}
         run: |
-          python scripts/verifier.py --report verification-report.json
+          python scripts/verifier.py --rpc-scope "$RPC_SCOPE" --report verification-report.json
 
       - name: Enforce state-root drift gate
         run: |
@@ -57,7 +107,7 @@ jobs:
               python - <<'PY'
           import json
           d = json.load(open("verification-report.json"))
-          print(f"**Result: {d['result']}** · slots: {d['slots_validated']} · merkle: `{d['merkle_root'][:16]}…`")
+          print(f"**Result: {d['result']}** · slots: {d['slots_validated']} · rpc scope: {d['rpc_scope']} · merkle: `{d['merkle_root'][:16]}…`")
           print("")
           print("| check | status | detail |")
           print("| :--- | :--- | :--- |")

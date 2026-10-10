@@ -1,0 +1,52 @@
+name: Self-check (advisory)
+
+# Runs the pull request's OWN tests and offline verifier so an infrastructure
+# PR gets a signal on the code it changes. Advisory only: it never decides a
+# claim. The branch ruleset must require "Verify from base (required)" from
+# verify_inscription.yml, which runs base-branch code on the PR's data and
+# ignores everything executable in the PR. This lives in its own workflow so
+# no job carrying the required check's name is ever produced from PR code.
+# No secrets, read-only token.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: self-check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  self-check:
+    name: Self-check from PR head (advisory)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the pull request head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install verification dependencies (pinned)
+        run: |
+          python -m pip install --upgrade pip
+          pip install "Pillow==12.3.0" "jsonschema==4.26.0" "rfc3339-validator==0.1.4" "rfc3987==1.3.8"
+
+      - name: Run the PR's test suite
+        run: python -m unittest discover -s tests -v
+
+      - name: Run the PR's verifier (offline)
+        env:
+          TFW_DIFF_RANGE: ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}
+        run: python scripts/verifier.py --skip-rpc
+
+      - name: Drift gates
+        run: |
+          python scripts/generate_state.py --check
+          python scripts/generate_spec.py --check

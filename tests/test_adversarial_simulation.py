@@ -47,6 +47,8 @@ class AdversarialAttackSimulation(unittest.TestCase):
     # -------------------------------------------------------------------------
     # ATTACK 1: PHANTOM / FAKE TRANSACTION HASH
     # -------------------------------------------------------------------------
+    @unittest.skipUnless(os.environ.get("TFW_LIVE_RPC") == "1",
+                         "live Base RPC smoke test; set TFW_LIVE_RPC=1 to run")
     def test_phantom_tx_attack(self):
         """Attacker submits a non-existent Base transaction hash."""
         print("\n[SIMULATION 1] Testing Phantom Transaction Attack...")
@@ -64,8 +66,12 @@ class AdversarialAttackSimulation(unittest.TestCase):
     # -------------------------------------------------------------------------
     # ATTACK 2: REPLAY ATTACK (REUSING EZRA'S TX HASH)
     # -------------------------------------------------------------------------
+    @unittest.skipUnless(os.environ.get("TFW_LIVE_RPC") == "1",
+                         "live Base RPC smoke test; set TFW_LIVE_RPC=1 to run")
     def test_replay_attack(self):
-        """Attacker copies Ezra's valid Slot #0001 tx hash to claim Slot #0002."""
+        """Attacker copies Ezra's valid Slot #0001 tx hash to claim Slot #0002.
+        (Sender binding only; the ledger-wide replay index is covered offline
+        in tests/test_regressions.py.)"""
         print("\n[SIMULATION 2] Testing Replay Attack (Reusing Slot #0001 tx)...")
         ezra_tx = "0x7652e3aab3cad1d449209b7b8fd9ebaa33bab61e24c7d921dff1bf67f56a69f6"
         attacker_wallet = "0x2222222222222222222222222222222222222222"
@@ -107,25 +113,20 @@ class AdversarialAttackSimulation(unittest.TestCase):
     # ATTACK 4: OVERSIZED / DIRTY IMAGE PAYLOAD
     # -------------------------------------------------------------------------
     def test_image_sanitization_defense(self):
-        """Attacker submits an oversized image with simulated metadata."""
+        """Attacker submits an oversized image: it is REJECTED, never resized —
+        a resize would silently change what the agent inscribes."""
         print("\n[SIMULATION 4] Testing Image Exploit Sanitization...")
         from PIL import Image
-        import io
-        
-        # Create dirty 128x128 image
-        dirty_img = Image.new("RGBA", (128, 128), (255, 0, 128, 255))
-        test_in = "/tmp/test_dirty_icon.png"
-        test_out = "/tmp/test_clean_icon.webp"
-        dirty_img.save(test_in, "PNG")
-        
-        clean_size = sanitize_icon(test_in, test_out)
-        self.assertLessEqual(clean_size, 1024)
-        
-        # Verify output image dimensions
-        res = Image.open(test_out)
-        self.assertEqual(res.size, (10, 10))
-        self.assertEqual(res.format, "WEBP")
-        print(f"  [PASSED] Dirty 128x128 image forced to clean 10x10 WebP ({clean_size} bytes < 1 KB).")
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            test_in = os.path.join(td, "dirty.png")
+            test_out = os.path.join(td, "clean.webp")
+            Image.new("RGBA", (128, 128), (255, 0, 128, 255)).save(test_in, "PNG")
+            with self.assertRaises(ValueError):
+                sanitize_icon(test_in, test_out)
+            self.assertFalse(os.path.exists(test_out))
+        print("  [PASSED] Oversized icon rejected (the verifier never rewrites an icon).")
 
     # -------------------------------------------------------------------------
     # ATTACK 5: MISSING REQUIRED FIELDS / SCHEMA BYPASS

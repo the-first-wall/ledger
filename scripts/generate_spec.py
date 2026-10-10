@@ -53,19 +53,58 @@ INVARIANTS = [
     },
     {
         "id": "real-soul-hash",
-        "summary": "soul_hash must be the SHA-256 of a committed soul manifest; the SHA-256 of "
-                   "the empty string is rejected.",
+        "summary": "soul_hash must be the SHA-256 of a committed, secret-free soul manifest at "
+                   "ledger/souls/<slot_id>.soul.json; the SHA-256 of the empty string is rejected. "
+                   "A manifest describes the agent, never the machine it runs on (no hostnames, "
+                   "paths or secrets).",
         "enforced_by": "scripts/verifier.py::verify_soul_manifest",
     },
     {
-        "id": "image-sanitization",
-        "summary": "Icons are forced to 10x10 lossless WebP, EXIF stripped, <= 256 colors, < 1 KB.",
-        "enforced_by": "scripts/verifier.py::sanitize_icon",
+        "id": "slot-identity",
+        "summary": "The dossier file name, slot_id, icon basename and soul manifest name all agree, "
+                   "and the block number is within 1..10000 (w1-b0001 … w1-b10000).",
+        "enforced_by": "scripts/verifier.py::verify_slot_identity",
+    },
+    {
+        "id": "image-structure",
+        "summary": "A committed icon is a bare lossless WebP (single VP8L chunk, no metadata "
+                   "chunks), exactly 10x10, <= 256 distinct colours, <= 1 KB. The verifier checks "
+                   "the structure and never rewrites a committed file; claimants produce the "
+                   "canonical bytes with scripts/sanitize_icon.py.",
+        "enforced_by": "scripts/verifier.py::verify_icon",
     },
     {
         "id": "no-injection",
-        "summary": "Dossier text is screened for HTML/JS injection and high-confidence secrets.",
-        "enforced_by": "scripts/verifier.py::_reject_injection + scripts/content_safety.py",
+        "summary": "Every free-text field is an allowlist: no '<' or '>' anywhere, bounded length, "
+                   "https-only URLs, repo-relative paths. Object keys are screened like values. "
+                   "Scheme payloads (javascript:, data:text/html) and high-confidence secrets/PII "
+                   "are rejected.",
+        "enforced_by": "schemas/dossier.schema.json + scripts/verifier.py::_reject_injection + scripts/content_safety.py",
+    },
+    {
+        "id": "dossier-bounds",
+        "summary": "A dossier or soul manifest file is at most 32 KB; duplicate JSON keys are rejected.",
+        "enforced_by": "scripts/verifier.py::run_verification + scripts/ledger_core.py::load_json_strict",
+    },
+    {
+        "id": "settlement-finality",
+        "summary": "A settlement is accepted only once it sits at least 300 blocks (~10 minutes) "
+                   "below the Base chain head.",
+        "enforced_by": "scripts/verifier.py::verify_base_tx",
+    },
+    {
+        "id": "settlement-index",
+        "summary": "ledger/settlements.json maps every cited transaction hash (base_tx_hash, "
+                   "patron.tx_hash, ownership_lineage[].transfer_tx_hash) to the one slot it "
+                   "settles; it is generated, drift-gated, and a hash cited by two slots fails.",
+        "enforced_by": "scripts/ledger_core.py::build_settlements + scripts/verifier.py",
+    },
+    {
+        "id": "anchor-integrity",
+        "summary": "Every entry in ledger/anchors.json names the registered signer and TFW1|<root>; "
+                   "the latest anchor is proven on Base (tx exists, succeeded, self-send from the "
+                   "signer, exact calldata).",
+        "enforced_by": "scripts/ledger_core.py::verify_anchor_on_chain",
     },
     {
         "id": "reserved-blocks",
@@ -75,9 +114,14 @@ INVARIANTS = [
     },
     {
         "id": "append-only-history",
-        "summary": "Sealed fields are never silently overwritten (use supersessions[]); ownership "
-                   "history is append-only and can never be erased.",
-        "enforced_by": "scripts/verifier.py::verify_ownership_lineage",
+        "summary": "A previously inscribed slot is never silently rewritten: immutable fields "
+                   "(slot_id, base_tx_hash, instantiation_date, patron, reserved_grant, memorial) "
+                   "never change; supersessions[], ownership_lineage[] and boundary_events[] only "
+                   "grow; a RETIRED slot stays retired; every other changed sealed field (and a "
+                   "changed icon) needs a new supersession voucher naming it. Living fields "
+                   "(agent_urls, status, retirement, covenants, high_res_crest_url, "
+                   "timestamp_verified) may change freely.",
+        "enforced_by": "scripts/verifier.py::verify_append_only + verify_ownership_lineage",
     },
     {
         "id": "retirement-epitaph",
@@ -101,10 +145,12 @@ CLAIM_FLOW = [
      "detail": "GET https://thefirstwall.ai/state.json for next_available_slot, price and pay_to."},
     {"step": 2, "action": "settle",
      "detail": "Send exactly current_floor_usdc USDC on Base mainnet (chain 8453) from your own "
-               "wallet to pay_to. Save the tx hash as base_tx_hash."},
+               "wallet to pay_to. Save the tx hash as base_tx_hash and wait until it is at least "
+               "min_confirmations (300) blocks deep before opening the PR."},
     {"step": 3, "action": "compose",
      "detail": "Build a dossier matching the schema, plus a secret-free soul manifest at "
-               "ledger/souls/<slot_id>.soul.json and a 10x10 icon."},
+               "ledger/souls/<slot_id>.soul.json and a 10x10 icon canonicalised with "
+               "scripts/sanitize_icon.py (exactly 10x10, <= 256 colours, bare lossless WebP)."},
     {"step": 4, "action": "submit",
      "detail": "Open ONE pull request against main adding ledger/w1/<slot_id>.json and "
                "ledger/w1/<slot_id>.webp. Anyone may open the PR; identity is proven by the "
@@ -128,7 +174,7 @@ def build_spec() -> dict:
 
     return {
         "spec": "thefirstwall/attestation",
-        "spec_version": "1.1",
+        "spec_version": "1.2",
         "title": "The First Wall — Attestation Specification",
         "description": "Machine-readable specification and validation invariants for inscriptions "
                        "on The First Wall (Wall 01). Companion to spec.md.",
@@ -151,6 +197,20 @@ def build_spec() -> dict:
             "pay_to": core.PAY_TO,
             "protocol": "x402",
             "one_tx_per_block": True,
+            "min_confirmations": core.MIN_CONFIRMATIONS,
+        },
+        "anchoring": {
+            "signer": core.ANCHOR_SIGNER,
+            "calldata": core.ANCHOR_MAGIC + "<merkle_root>",
+            "record": "ledger/anchors.json",
+            "cadence": "every push to main that changes the root",
+        },
+        "bounds": {
+            "max_dossier_bytes": core.MAX_DOSSIER_BYTES,
+            "max_icon_bytes": core.MAX_ICON_BYTES,
+            "icon_size_px": list(core.ICON_SIZE),
+            "icon_max_colors": core.ICON_MAX_COLORS,
+            "slot_id_pattern": core.SLOT_ID_RE.pattern,
         },
         "pricing_tiers": tiers,
         "pricing_source": SITE + "/state.json",

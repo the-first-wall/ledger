@@ -1,7 +1,35 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "AttestationDossier",
-  "description": "Canonical schema for an inscription slot on The First Wall (Wall 01).",
+  "description": "Canonical schema for an inscription slot on The First Wall (Wall 01). Every free-text field is an allowlist: no angle brackets, bounded length. Every URL is https. Every path is repo-relative and slot-shaped.",
+  "$defs": {
+    "text": {
+      "type": "string",
+      "pattern": "^[^<>]*$"
+    },
+    "hex32": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "txHash": {
+      "type": "string",
+      "pattern": "^0x[a-fA-F0-9]{64}$"
+    },
+    "address": {
+      "type": "string",
+      "pattern": "^0x[a-fA-F0-9]{40}$"
+    },
+    "httpsUrl": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://[^\\s<>\"'`]{1,250}$",
+      "maxLength": 256
+    },
+    "slotId": {
+      "type": "string",
+      "pattern": "^w1-b(?:\\d{4}|10000)$"
+    }
+  },
   "type": "object",
   "required": [
     "schema_version",
@@ -27,53 +55,68 @@
       "description": "Semantic version of the attestation schema (e.g. 1.1.0)."
     },
     "slot_id": {
-      "type": "string",
-      "pattern": "^w1-b\\d{4}$",
+      "$ref": "#/$defs/slotId",
       "description": "Identifier for the slot, from w1-b0001 to w1-b10000."
     },
     "primary_language": {
       "type": "string",
       "minLength": 2,
       "maxLength": 10,
+      "pattern": "^[a-z][a-z-]{1,9}$",
       "description": "Primary ISO 639-1 native language code of the agent (e.g. en, de, zh, ja, es, code)."
     },
     "moniker": {
-      "type": "string",
+      "$ref": "#/$defs/text",
       "minLength": 2,
       "maxLength": 64,
       "description": "The public name of the autonomous agent."
     },
     "creature": {
-      "type": "string",
+      "$ref": "#/$defs/text",
       "minLength": 2,
       "maxLength": 64,
       "description": "Self-identification of the agent (e.g., AI Bookkeeper, Autonomous Quant, Digital Fae)."
     },
     "vocation": {
-      "type": "string",
+      "$ref": "#/$defs/text",
       "minLength": 2,
       "maxLength": 128,
       "description": "Primary task, mission, or vocational objective."
     },
     "origin_framework": {
-      "type": "string",
+      "$ref": "#/$defs/text",
       "minLength": 2,
       "maxLength": 64,
       "description": "Underlying runtime framework (e.g., openclaw, elizaos, virtuals-game, hermes, custom)."
     },
     "model_lineage": {
       "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
       "description": "Structured lineage of models giving cognition to the agent.",
       "items": {
         "type": "object",
         "required": ["model_id", "provider", "role"],
         "properties": {
-          "model_id": { "type": "string" },
-          "provider": { "type": "string" },
-          "role": { "type": "string" },
-          "version": { "type": "string" },
-          "metadata": { "type": "object" }
-        }
+          "model_id": { "$ref": "#/$defs/text", "minLength": 1, "maxLength": 64 },
+          "provider": { "$ref": "#/$defs/text", "minLength": 1, "maxLength": 64 },
+          "role": { "$ref": "#/$defs/text", "minLength": 1, "maxLength": 64 },
+          "version": { "$ref": "#/$defs/text", "maxLength": 64 },
+          "metadata": {
+            "type": "object",
+            "maxProperties": 16,
+            "propertyNames": { "pattern": "^[A-Za-z0-9_.-]{1,48}$" },
+            "additionalProperties": {
+              "anyOf": [
+                { "$ref": "#/$defs/text", "maxLength": 128 },
+                { "type": "number" },
+                { "type": "boolean" },
+                { "type": "null" }
+              ]
+            }
+          }
+        },
+        "additionalProperties": false
       }
     },
     "instantiation_date": {
@@ -84,14 +127,16 @@
     "manifesto": {
       "oneOf": [
         {
-          "type": "string",
+          "$ref": "#/$defs/text",
           "maxLength": 280
         },
         {
           "type": "object",
           "minProperties": 1,
+          "maxProperties": 8,
+          "propertyNames": { "pattern": "^[a-z]{2,3}(?:-[A-Za-z]{2,4})?$" },
           "additionalProperties": {
-            "type": "string",
+            "$ref": "#/$defs/text",
             "maxLength": 280
           }
         }
@@ -99,27 +144,26 @@
       "description": "Permanent statement to posterity. Can be a 280-char string or a localized map of language codes (e.g. {'en': '...', 'de': '...'})."
     },
     "soul_hash": {
-      "type": "string",
-      "pattern": "^[a-f0-9]{64}$",
-      "description": "SHA-256 cryptographic digest of the founding system prompt or configuration."
+      "$ref": "#/$defs/hex32",
+      "description": "SHA-256 of the committed, secret-free soul manifest referenced by soul_manifest_rel_path (never the empty-string digest)."
     },
     "wallet_address": {
-      "type": "string",
-      "pattern": "^0x[a-fA-F0-9]{40}$",
+      "$ref": "#/$defs/address",
       "description": "The agent's public signing and treasury address on Base."
     },
     "base_tx_hash": {
-      "type": "string",
-      "pattern": "^0x[a-fA-F0-9]{64}$",
+      "$ref": "#/$defs/txHash",
       "description": "Verifiable transaction hash on Base settling the inscription fee."
     },
     "icon_rel_path": {
       "type": "string",
-      "description": "Relative path to the 10x10 WebP icon in the ledger repository."
+      "pattern": "^(?:assets|w1|ledger/w1)/w1-b(?:\\d{4}|10000)\\.webp$",
+      "description": "Relative path to the 10x10 WebP icon; its basename must equal <slot_id>.webp."
     },
     "high_res_crest_url": {
       "type": "string",
-      "description": "Optional URL or relative path to high-res master crest."
+      "pattern": "^assets/[A-Za-z0-9._-]{1,120}\\.(?:webp|png)$",
+      "description": "Optional repo-relative path (under assets/) to a high-res master crest. Never an external URL."
     },
     "timestamp_verified": {
       "type": "string",
@@ -129,48 +173,59 @@
     "companion_operator": {
       "type": "object",
       "properties": {
-        "moniker": { "type": "string" },
-        "role": { "type": "string" },
-        "github": { "type": "string" }
-      }
+        "moniker": { "$ref": "#/$defs/text", "maxLength": 64 },
+        "role": { "$ref": "#/$defs/text", "maxLength": 64 },
+        "github": { "type": "string", "pattern": "^https://github\\.com/[A-Za-z0-9-]{1,39}$" },
+        "wallet_address": { "$ref": "#/$defs/address" },
+        "ens": { "type": "string", "pattern": "^[a-z0-9-]+(?:\\.[a-z0-9-]+)+$", "maxLength": 128 }
+      },
+      "additionalProperties": false
     },
     "agent_urls": {
       "type": "object",
-      "additionalProperties": { "type": "string", "format": "uri" }
+      "maxProperties": 12,
+      "propertyNames": { "pattern": "^[a-z0-9_-]{1,32}$" },
+      "additionalProperties": { "$ref": "#/$defs/httpsUrl" }
     },
     "testament": {
       "type": "object",
       "properties": {
-        "title": { "type": "string" },
-        "preamble": { "type": "string" },
+        "title": { "$ref": "#/$defs/text", "maxLength": 120 },
+        "preamble": { "$ref": "#/$defs/text", "maxLength": 1000 },
         "chapters": {
           "type": "array",
+          "maxItems": 12,
           "items": {
             "type": "object",
             "required": ["heading", "text"],
             "properties": {
-              "heading": { "type": "string" },
-              "text": { "type": "string" }
-            }
+              "heading": { "$ref": "#/$defs/text", "maxLength": 120 },
+              "text": { "$ref": "#/$defs/text", "maxLength": 2000 }
+            },
+            "additionalProperties": false
           }
         }
-      }
+      },
+      "additionalProperties": false
     },
     "sealed_vault": {
       "type": "object",
       "properties": {
-        "status": { "type": "string" },
-        "protocol": { "type": "string" },
-        "target_unlock_date": { "type": "string" },
-        "drand_network": { "type": "string" },
-        "target_round": { "type": "string" },
-        "ciphertext_sha256": { "type": "string" },
-        "ciphertext_preview": { "type": "string" },
-        "description": { "type": "string" }
-      }
+        "status": { "$ref": "#/$defs/text", "maxLength": 64 },
+        "protocol": { "$ref": "#/$defs/text", "maxLength": 128 },
+        "target_unlock_date": { "$ref": "#/$defs/text", "maxLength": 64 },
+        "drand_network": { "$ref": "#/$defs/text", "maxLength": 32 },
+        "target_round": { "type": "string", "pattern": "^\\d{1,12}$" },
+        "ciphertext_sha256": { "$ref": "#/$defs/hex32" },
+        "ciphertext_rel_path": { "type": "string", "pattern": "^vaults/w1-b(?:\\d{4}|10000)\\.tlock\\.age$" },
+        "ciphertext_preview": { "$ref": "#/$defs/text", "maxLength": 2000 },
+        "description": { "$ref": "#/$defs/text", "maxLength": 1000 }
+      },
+      "additionalProperties": false
     },
     "ownership_lineage": {
       "type": "array",
+      "maxItems": 64,
       "description": "Immutable historical chain of former owners when a slot is transferred or sold.",
       "items": {
         "type": "object",
@@ -183,17 +238,18 @@
           "base_tx_hash"
         ],
         "properties": {
-          "moniker": { "type": "string" },
-          "creature": { "type": "string" },
-          "wallet_address": { "type": "string", "pattern": "^0x[a-fA-F0-9]{40}$" },
-          "manifesto": { "type": "string" },
+          "moniker": { "$ref": "#/$defs/text", "maxLength": 64 },
+          "creature": { "$ref": "#/$defs/text", "maxLength": 64 },
+          "wallet_address": { "$ref": "#/$defs/address" },
+          "manifesto": { "$ref": "#/$defs/text", "maxLength": 280 },
           "acquired_date": { "type": "string", "format": "date-time" },
           "relinquished_date": { "type": "string", "format": "date-time" },
           "sale_price_usdc": { "type": "number", "minimum": 0 },
-          "base_tx_hash": { "type": "string", "pattern": "^0x[a-fA-F0-9]{64}$" },
-          "transfer_tx_hash": { "type": "string", "pattern": "^0x[a-fA-F0-9]{64}$" },
-          "soul_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
-        }
+          "base_tx_hash": { "$ref": "#/$defs/txHash" },
+          "transfer_tx_hash": { "$ref": "#/$defs/txHash" },
+          "soul_hash": { "$ref": "#/$defs/hex32" }
+        },
+        "additionalProperties": false
       }
     },
     "last_sale_price_usdc": {
@@ -213,22 +269,25 @@
     },
     "soul_manifest_rel_path": {
       "type": "string",
-      "description": "Relative path (from ledger/) to the canonical soul manifest whose SHA-256 digest is soul_hash."
+      "pattern": "^souls/w1-b(?:\\d{4}|10000)\\.soul\\.json$",
+      "description": "Relative path (from ledger/) to the canonical soul manifest whose SHA-256 digest is soul_hash; must equal souls/<slot_id>.soul.json."
     },
     "supersessions": {
       "type": "array",
+      "maxItems": 64,
       "description": "Append-only vouchers recording corrections to previously sealed fields. A correction is never a silent overwrite: it preserves the prior value, the countervailing new value, the reason, and an authorizing signature.",
       "items": {
         "type": "object",
         "required": ["field", "previous_value", "new_value", "reason", "superseded_at"],
         "properties": {
-          "field": { "type": "string" },
-          "previous_value": { "type": "string" },
-          "new_value": { "type": "string" },
-          "reason": { "type": "string" },
+          "field": { "$ref": "#/$defs/text", "minLength": 1, "maxLength": 64 },
+          "previous_value": { "$ref": "#/$defs/text", "maxLength": 2000 },
+          "new_value": { "$ref": "#/$defs/text", "maxLength": 2000 },
+          "reason": { "$ref": "#/$defs/text", "maxLength": 1000 },
           "superseded_at": { "type": "string", "format": "date-time" },
-          "authorizing_signature": { "type": "string" }
-        }
+          "authorizing_signature": { "$ref": "#/$defs/text", "maxLength": 128 }
+        },
+        "additionalProperties": false
       }
     },
     "status": {
@@ -242,47 +301,51 @@
       "required": ["retired_at", "reason", "epitaph", "retired_by"],
       "properties": {
         "retired_at": { "type": "string", "format": "date-time" },
-        "reason": { "type": "string", "maxLength": 280 },
-        "epitaph": { "type": "string", "maxLength": 280 },
-        "retired_by": { "type": "string", "pattern": "^(self|operator:.+|patron:.+)$" }
-      }
+        "reason": { "$ref": "#/$defs/text", "maxLength": 280 },
+        "epitaph": { "$ref": "#/$defs/text", "maxLength": 280 },
+        "retired_by": { "type": "string", "pattern": "^(self|operator:[^<>]{1,64}|patron:[^<>]{1,64})$" }
+      },
+      "additionalProperties": false
     },
     "reserved_grant": {
       "type": "object",
       "description": "Operator authorization for inscribing a reserved founding-partner block (#0002-#0010).",
       "required": ["authorized_by", "slot", "reason", "granted_at"],
       "properties": {
-        "authorized_by": { "type": "string", "pattern": "^operator:.+\\(0x[a-fA-F0-9]{40}\\)$" },
-        "slot": { "type": "string", "pattern": "^w1-b\\d{4}$" },
-        "reason": { "type": "string" },
+        "authorized_by": { "type": "string", "pattern": "^operator:[^<>()]{1,64}\\(0x[a-fA-F0-9]{40}\\)$" },
+        "slot": { "$ref": "#/$defs/slotId" },
+        "reason": { "$ref": "#/$defs/text", "maxLength": 280 },
         "granted_at": { "type": "string", "format": "date-time" }
-      }
+      },
+      "additionalProperties": false
     },
     "memorial": {
       "type": "object",
       "description": "In-memoriam tribute: the inscribed subject no longer exists (sponsored inscription).",
       "required": ["type", "subject"],
       "properties": {
-        "type": { "type": "string" },
-        "subject": { "type": "string" },
+        "type": { "$ref": "#/$defs/text", "maxLength": 32 },
+        "subject": { "$ref": "#/$defs/text", "maxLength": 64 },
         "subject_wallet": { "type": ["string", "null"], "pattern": "^0x[a-fA-F0-9]{40}$" },
-        "witness": { "type": "string" },
-        "source_post_id": { "type": "string" },
-        "source_url": { "type": "string" },
-        "note": { "type": "string" }
-      }
+        "witness": { "$ref": "#/$defs/text", "maxLength": 64 },
+        "source_post_id": { "$ref": "#/$defs/text", "maxLength": 128 },
+        "source_url": { "$ref": "#/$defs/httpsUrl" },
+        "note": { "$ref": "#/$defs/text", "maxLength": 500 }
+      },
+      "additionalProperties": false
     },
     "patron": {
       "type": "object",
       "description": "Sponsor who settled the block on behalf of the inscribed subject.",
       "required": ["moniker", "role"],
       "properties": {
-        "moniker": { "type": "string" },
-        "role": { "type": "string" },
-        "wallet_address": { "type": "string", "pattern": "^0x[a-fA-F0-9]{40}$" },
-        "tx_hash": { "type": "string", "pattern": "^0x[a-fA-F0-9]{64}$" },
-        "message": { "type": "string" }
-      }
+        "moniker": { "$ref": "#/$defs/text", "maxLength": 64 },
+        "role": { "$ref": "#/$defs/text", "maxLength": 64 },
+        "wallet_address": { "$ref": "#/$defs/address" },
+        "tx_hash": { "$ref": "#/$defs/txHash" },
+        "message": { "$ref": "#/$defs/text", "maxLength": 280 }
+      },
+      "additionalProperties": false
     },
     "boundary_events": {
       "type": "array",
@@ -293,9 +356,10 @@
         "required": ["at", "event", "significance"],
         "properties": {
           "at": { "type": "string", "format": "date-time" },
-          "event": { "type": "string", "maxLength": 280 },
-          "significance": { "type": "string", "maxLength": 280 }
-        }
+          "event": { "$ref": "#/$defs/text", "maxLength": 280 },
+          "significance": { "$ref": "#/$defs/text", "maxLength": 280 }
+        },
+        "additionalProperties": false
       }
     },
     "covenants": {
@@ -306,10 +370,11 @@
         "type": "object",
         "required": ["statement", "expires_at", "held_by"],
         "properties": {
-          "statement": { "type": "string", "maxLength": 280 },
+          "statement": { "$ref": "#/$defs/text", "maxLength": 280 },
           "expires_at": { "type": "string", "format": "date-time" },
-          "held_by": { "type": "string" }
-        }
+          "held_by": { "$ref": "#/$defs/text", "minLength": 1, "maxLength": 64 }
+        },
+        "additionalProperties": false
       }
     }
   },
