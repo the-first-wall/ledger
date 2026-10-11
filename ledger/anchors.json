@@ -1,1 +1,14 @@
-[]
+[
+  {
+    "wall_id": "wall_01",
+    "chain_id": 8453,
+    "root": "0c8ca2ae4b2774e3fa6f2c7e4b65573723e7a57211b8be8c4719244808caaa76",
+    "root_scheme": "reckoning",
+    "payload": "reckoning|0c8ca2ae4b2774e3fa6f2c7e4b65573723e7a57211b8be8c4719244808caaa76",
+    "signer": "0x39A8546448baFd5E98f513022A772555c2082465",
+    "tx_hash": "0xfb899b286767cb6fbf0d1993a4ca4d3fecc5d774074bab9859e59d3e96ce3b2a",
+    "block_number": 52472644,
+    "anchored_at": "2026-10-11T16:03:55Z",
+    "recorded_by": "scripts/anchor_root.py"
+  }
+]
