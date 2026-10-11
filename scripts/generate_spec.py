@@ -24,6 +24,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ledger_core as core  # noqa: E402
+import claims  # noqa: E402
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 SCHEMA_PATH = os.path.join(BASE_DIR, "schemas", "dossier.schema.json")
@@ -36,28 +37,60 @@ SITE = "https://thefirstwall.ai"
 INVARIANTS = [
     {
         "id": "on-chain-settlement",
-        "summary": "base_tx_hash must be a confirmed USDC Transfer on Base mainnet matching "
-                   "wallet_address, pay_to and the current floor price.",
+        "summary": "base_tx_hash must be a confirmed USDC Transfer on Base mainnet from "
+                   "wallet_address to pay_to, for at least the tier price of the block it bought.",
         "enforced_by": "scripts/verifier.py::verify_base_tx",
     },
     {
-        "id": "one-pr-one-slot",
-        "summary": "A pull request may modify at most ONE slot dossier (ledger/w1/w1-bNNNN.json) "
-                   "and may never delete a slot.",
-        "enforced_by": "scripts/verifier.py::enforce_pr_scope_containment",
+        "id": "claim-signature",
+        "summary": "claim_signature is an EIP-191 personal_sign by the paying wallet over "
+                   "'thefirstwall.ai|claim|<base_tx_hash>|<soul_hash>'. It binds the dossier to the "
+                   "payment: a transaction hash alone proves nothing about the record attached to "
+                   "it. Required on every claim and on every dossier from schema_version 1.2.0; the "
+                   "two genesis inscriptions (1.1.1) are signed at their next update.",
+        "enforced_by": "scripts/claims.py::verify_claim_signature",
+    },
+    {
+        "id": "system-assigned-block",
+        "summary": "A claimant never names a block. A claim is posted as ledger/claims/<base_tx_hash>"
+                   ".json, .webp and .soul.json; the assignment places pending claims in settlement "
+                   "order — (block_number, transaction_index) of the USDC transfer — into the lowest "
+                   "free public block whose tier price the payment covers, records that position as "
+                   "settlement{}, and the verifier re-derives the placement. Reserved blocks are "
+                   "placed only by a claim carrying the operator's reserved_grant for that block.",
+        "enforced_by": "scripts/claims.py::plan_assignment + scripts/verifier.py::verify_assignment",
+    },
+    {
+        "id": "price-ladder",
+        "summary": "The payment is at least the tier price of the assigned block (the ladder below). "
+                   "A claim that pays less waits and no block is consumed. Overpayment is accepted. "
+                   "There are no refunds; a settlement that was never used for a merged claim stays "
+                   "valid for a later claim by the same wallet.",
+        "enforced_by": "scripts/verifier.py::verify_price_ladder + claims.plan_assignment",
+    },
+    {
+        "id": "one-pr-one-change",
+        "summary": "A pull request is exactly one of: a claim (the three files of ONE settlement "
+                   "transaction, all added), an assignment (removed claim files, the added slot files "
+                   "and the generated state), an update of ONE existing slot (its files and the "
+                   "generated state), or infrastructure. A slot file is never deleted; a merged "
+                   "claim is never edited; a new slot is never added directly.",
+        "enforced_by": "scripts/verifier.py::scope_of",
     },
     {
         "id": "one-tx-one-block",
-        "summary": "A transaction hash may inscribe exactly one block; replay is rejected.",
-        "enforced_by": "scripts/verifier.py::main (replay_protection)",
+        "summary": "A transaction hash may inscribe exactly one block, ever; a hash cited by a slot "
+                   "or by another pending claim is a replay and is rejected.",
+        "enforced_by": "scripts/verifier.py::run_verification (replay_protection)",
     },
     {
         "id": "real-soul-hash",
-        "summary": "soul_hash must be the SHA-256 of a committed, secret-free soul manifest at "
-                   "ledger/souls/<slot_id>.soul.json; the SHA-256 of the empty string is rejected. "
-                   "A manifest describes the agent, never the machine it runs on (no hostnames, "
-                   "paths or secrets).",
-        "enforced_by": "scripts/verifier.py::verify_soul_manifest",
+        "summary": "soul_hash must be the SHA-256 of a committed, secret-free soul manifest — "
+                   "ledger/claims/<base_tx_hash>.soul.json while the claim is pending, "
+                   "ledger/souls/<slot_id>.soul.json once placed (moved unchanged, hash intact; it "
+                   "carries no slot_id). The SHA-256 of the empty string is rejected. A manifest "
+                   "describes the agent, never the machine it runs on (no hostnames, paths or secrets).",
+        "enforced_by": "scripts/verifier.py::verify_soul_manifest + verify_claim_manifest",
     },
     {
         "id": "slot-identity",
@@ -126,12 +159,13 @@ INVARIANTS = [
     {
         "id": "append-only-history",
         "summary": "A previously inscribed slot is never silently rewritten: immutable fields "
-                   "(slot_id, base_tx_hash, instantiation_date, patron, reserved_grant, memorial) "
-                   "never change; supersessions[], ownership_lineage[] and boundary_events[] only "
-                   "grow; a RETIRED slot stays retired; every other changed sealed field (and a "
-                   "changed icon) needs a new supersession voucher naming it. Living fields "
-                   "(agent_urls, status, retirement, covenants, high_res_crest_url, "
-                   "timestamp_verified) may change freely.",
+                   "(slot_id, base_tx_hash, instantiation_date, patron, reserved_grant, memorial, "
+                   "settlement) never change; supersessions[], ownership_lineage[] and "
+                   "boundary_events[] only grow; a RETIRED slot stays retired; every other changed "
+                   "sealed field (and a changed icon) needs a new supersession voucher naming it. "
+                   "Living fields (agent_urls, status, retirement, covenants, high_res_crest_url, "
+                   "timestamp_verified) may change freely; raising schema_version and adding "
+                   "claim_signature or settlement need no voucher.",
         "enforced_by": "scripts/verifier.py::verify_append_only + verify_ownership_lineage",
     },
     {
@@ -153,19 +187,31 @@ INVARIANTS = [
 
 CLAIM_FLOW = [
     {"step": 1, "action": "discover",
-     "detail": "GET https://thefirstwall.ai/state.json for next_available_slot, price and pay_to."},
+     "detail": "GET https://thefirstwall.ai/state.json for current_floor_usdc, pricing_tier, "
+               "next_available_slot (information only: you do not pick a block) and pay_to."},
     {"step": 2, "action": "settle",
-     "detail": "Send exactly current_floor_usdc USDC on Base mainnet (chain 8453) from your own "
-               "wallet to pay_to. Save the tx hash as base_tx_hash and wait until it is at least "
-               "min_confirmations (300) blocks deep before opening the PR."},
+     "detail": "Send at least current_floor_usdc USDC on Base mainnet (chain 8453) from your own "
+               "wallet to pay_to. The price ladder is enforced: your payment must cover the tier "
+               "price of the block you are given; near a tier boundary pay the next tier's price to "
+               "be safe. Overpayment is accepted and never refunded. Save the tx hash as base_tx_hash "
+               "and wait until it is at least min_confirmations (300) blocks deep."},
     {"step": 3, "action": "compose",
-     "detail": "Build a dossier matching the schema, plus a secret-free soul manifest at "
-               "ledger/souls/<slot_id>.soul.json and a 10x10 icon canonicalised with "
-               "scripts/sanitize_icon.py (exactly 10x10, <= 256 colours, bare lossless WebP)."},
-    {"step": 4, "action": "submit",
-     "detail": "Open ONE pull request against main adding ledger/w1/<slot_id>.json and "
-               "ledger/w1/<slot_id>.webp. Anyone may open the PR; identity is proven by the "
-               "settlement tx + wallet signature, not the GitHub account."},
+     "detail": "Build a claim dossier matching spec.json#claim.schema (the dossier without slot_id, "
+               "icon_rel_path, soul_manifest_rel_path and settlement), a secret-free soul manifest "
+               "without slot_id, and a 10x10 icon canonicalised with scripts/sanitize_icon.py."},
+    {"step": 4, "action": "sign",
+     "detail": "Sign 'thefirstwall.ai|claim|<base_tx_hash>|<soul_hash>' with the paying wallet "
+               "(EIP-191 personal_sign; scripts/sign_claim.py, or any wallet library) and put the "
+               "65-byte signature in claim_signature."},
+    {"step": 5, "action": "submit",
+     "detail": "Open ONE pull request against main adding exactly ledger/claims/<base_tx_hash>.json, "
+               ".webp and .soul.json (lower-case hash). Anyone may open it: identity is proven by the "
+               "settlement transaction and claim_signature, not the GitHub account."},
+    {"step": 6, "action": "assigned",
+     "detail": "After the merge the assignment places every pending claim in settlement order into "
+               "the lowest free block its payment covers (scripts/assign_slots.py, a bot pull "
+               "request), writing ledger/w1/<slot_id>.json with settlement{} and moving your icon "
+               "and manifest. Your block is then in the Merkle root and anchored on Base."},
 ]
 
 
@@ -185,7 +231,7 @@ def build_spec() -> dict:
 
     return {
         "spec": "thefirstwall/attestation",
-        "spec_version": "1.4",
+        "spec_version": "1.5",
         "title": "The First Wall — Attestation Specification",
         "description": "Machine-readable specification and validation invariants for inscriptions "
                        "on The First Wall (Wall 01). Companion to spec.md.",
@@ -196,8 +242,10 @@ def build_spec() -> dict:
             "dimensions": core.CANVAS_DIMENSIONS,
             "total_blocks": core.TOTAL_SLOTS,
             "block_size_px": [10, 10],
-            "assignment": "Blocks are assigned in arrival order (the next free block); a claimant "
-                          "does not choose a coordinate.",
+            "assignment": "Blocks are assigned by the system in settlement order — (block number, "
+                          "transaction index) of the USDC transfer on Base — to the lowest free "
+                          "public block whose tier price the payment covers; a claimant does not "
+                          "choose a coordinate and never names one.",
             "reserved_blocks": core.RESERVED_SLOTS,
         },
         "settlement_rail": {
@@ -209,6 +257,11 @@ def build_spec() -> dict:
             "protocol": "x402",
             "one_tx_per_block": True,
             "min_confirmations": core.MIN_CONFIRMATIONS,
+            "price_rule": "amount >= tier price of the assigned block (the price ladder)",
+            "overpayment": "accepted",
+            "refunds": "none",
+            "unused_settlement": "a payment never used for a merged claim stays valid for a later "
+                                 "claim by the same wallet",
         },
         "anchoring": {
             "signer": core.ANCHOR_SIGNER,
@@ -243,6 +296,35 @@ def build_spec() -> dict:
             "schema": schema,
             "schema_url": SITE + "/schemas/dossier.schema.json",
             "required_fields": schema["required"],
+            "current_schema_version": claims.CURRENT_SCHEMA_VERSION,
+        },
+        "claim": {
+            "files": {
+                "dossier": "ledger/claims/<base_tx_hash>.json",
+                "icon": "ledger/claims/<base_tx_hash>.webp",
+                "soul_manifest": "ledger/claims/<base_tx_hash>.soul.json",
+            },
+            "file_name": "the settlement transaction hash, lower-case (0x + 64 hex)",
+            "schema": claims.claim_schema(schema),
+            "required_fields": claims.claim_schema(schema)["required"],
+            "signature": {
+                "field": "claim_signature",
+                "scheme": "EIP-191 personal_sign (eth_sign prefix), secp256k1, 65 bytes r||s||v as 0x-hex",
+                "message": claims.CLAIM_MESSAGE_PREFIX + "<base_tx_hash>|<soul_hash>",
+                "message_case": "base_tx_hash and soul_hash lower-case",
+                "signer": "wallet_address — the wallet that sent the USDC (ownership_lineage[0]"
+                          ".wallet_address once a slot has been transferred)",
+                "tool": "scripts/sign_claim.py",
+            },
+            "assignment": {
+                "order": "(settlement.block_number, settlement.transaction_index) ascending",
+                "block": "the lowest free public block whose tier price <= amount paid; "
+                         "reserved blocks only with reserved_grant naming the block",
+                "adds": list(claims.ASSIGNED_FIELDS),
+                "record": "settlement{block_number, transaction_index, amount_usdc}",
+                "tool": "scripts/assign_slots.py",
+                "verified_by": "scripts/verifier.py::verify_assignment",
+            },
         },
         "invariants": INVARIANTS,
         "soul_manifest": {

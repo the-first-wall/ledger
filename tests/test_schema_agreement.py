@@ -143,6 +143,14 @@ AGREEMENT_CASES = {
         covenants=[{**VALID_COVENANT, "statement": "x" * 281}]),
     "covenant_bad_expires_at": lambda d: d.update(
         covenants=[{**VALID_COVENANT, "expires_at": "whenever"}]),
+    # Claim signature (from schema 1.2.0) and the settlement record.
+    "signature_bad_shape": lambda d: d.update(claim_signature="0x1234"),
+    "v120_without_signature": lambda d: d.update(schema_version="1.2.0"),
+    "v200_without_signature": lambda d: d.update(schema_version="2.0.0"),
+    "settlement_missing_index": lambda d: d.update(
+        settlement={"block_number": 52_300_000, "amount_usdc": 1.0}),
+    "settlement_negative_amount": lambda d: d.update(
+        settlement={"block_number": 52_300_000, "transaction_index": 0, "amount_usdc": -1}),
 }
 
 
@@ -173,6 +181,14 @@ class SchemaAgreementTests(unittest.TestCase):
         d = base_dossier()
         d["status"] = "RETIRED"
         d["memorial"] = {"type": "in_memoriam", "subject": "Larry"}
+        self.assertTrue(schema_ok(d))
+        self.assertTrue(validator_ok(d))
+
+    def test_signed_120_dossier_with_settlement_accepted_everywhere(self):
+        d = base_dossier()
+        d["schema_version"] = "1.2.0"
+        d["claim_signature"] = "0x" + "ab" * 65   # shape only; the recovery check is separate
+        d["settlement"] = {"block_number": 52_300_000, "transaction_index": 3, "amount_usdc": 1.0}
         self.assertTrue(schema_ok(d))
         self.assertTrue(validator_ok(d))
 
