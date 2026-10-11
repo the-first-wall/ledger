@@ -44,7 +44,10 @@ CLAIM_SOUL_RE = re.compile(r"^ledger/claims/(0x[0-9a-f]{64})\.soul\.json$")
 SIGNED_SCHEMA_VERSION = (1, 2, 0)
 CURRENT_SCHEMA_VERSION = "1.2.0"
 CLAIM_MESSAGE_PREFIX = "thefirstwall.ai|claim|"
+TRANSFER_MESSAGE_PREFIX = "thefirstwall.ai|transfer|"
 SIGNATURE_RE = re.compile(r"^0x[0-9a-fA-F]{130}$")
+# Fields a posted claim never carries: it is a new inscription with no history.
+CLAIM_FORBIDDEN_FIELDS = ("ownership_lineage", "update_settlements")
 
 # What the assignment adds to a claim to make it a slot dossier.
 ASSIGNED_FIELDS = ("slot_id", "icon_rel_path", "soul_manifest_rel_path", "settlement")
@@ -97,6 +100,19 @@ def expected_signer(dossier: Dict[str, Any]) -> str:
     return str(dossier.get("wallet_address", ""))
 
 
+def original_soul_hash(dossier: Dict[str, Any]) -> str:
+    """The soul_hash the claim was signed over: the first owner's, kept in
+    ownership_lineage[0] once the slot has been transferred."""
+    lineage = dossier.get("ownership_lineage") or []
+    if lineage and isinstance(lineage[0], dict) and lineage[0].get("soul_hash"):
+        return str(lineage[0]["soul_hash"])
+    return str(dossier.get("soul_hash", ""))
+
+
+def claim_message_for(dossier: Dict[str, Any]) -> str:
+    return claim_message(dossier.get("base_tx_hash"), original_soul_hash(dossier))
+
+
 def verify_claim_signature(dossier: Dict[str, Any]) -> str:
     sig = dossier.get("claim_signature")
     if not sig:
@@ -104,11 +120,72 @@ def verify_claim_signature(dossier: Dict[str, Any]) -> str:
             "claim_signature is missing: sign thefirstwall.ai|claim|<base_tx_hash>|<soul_hash> "
             "with the paying wallet (scripts/sign_claim.py)."
         )
-    signer = recover_signer(claim_message(dossier.get("base_tx_hash"), dossier.get("soul_hash")), sig)
+    signer = recover_signer(claim_message_for(dossier), sig)
     expected = expected_signer(dossier)
     if signer.lower() != expected.lower():
         raise ValueError(f"claim_signature was made by {signer}, not by the paying wallet {expected}.")
     return f"signed by {signer}"
+
+
+# --- The transfer release ------------------------------------------------------
+#
+# A sale is settled between seller and buyer outside the ledger (the ledger is
+# no party to it and verifies no sale payment). What the ledger needs is the
+# seller's consent: the RELEASE, an EIP-191 personal_sign by the outgoing
+# owner over
+#
+#     thefirstwall.ai|transfer|<slot_id>|<from_wallet>|<to_wallet>|<n>
+#
+# where n is the number of previous owners already on record (the index the
+# new ownership_lineage entry takes), so a release can never be replayed.
+
+def transfer_message(slot_id: Any, from_wallet: Any, to_wallet: Any, index: int) -> str:
+    return (f"{TRANSFER_MESSAGE_PREFIX}{str(slot_id).lower()}|{str(from_wallet).lower()}|"
+            f"{str(to_wallet).lower()}|{int(index)}")
+
+
+def sign_transfer(slot_id: str, from_wallet: str, to_wallet: str, index: int, private_key: str) -> str:
+    """The seller's release signature (never logs the key)."""
+    from eth_account import Account
+    from eth_account.messages import encode_defunct
+    signed = Account.sign_message(encode_defunct(text=transfer_message(slot_id, from_wallet, to_wallet, index)),
+                                  private_key=private_key)
+    sig = signed.signature.hex()
+    return sig if sig.startswith("0x") else "0x" + sig
+
+
+def verify_transfer_release(slot_id: str, from_wallet: str, to_wallet: str, index: int, signature: Any) -> str:
+    if not signature:
+        raise ValueError(
+            "transfer_signature is missing: the outgoing owner releases the block by signing "
+            "thefirstwall.ai|transfer|<slot_id>|<from_wallet>|<to_wallet>|<n> (scripts/sign_transfer.py)."
+        )
+    signer = recover_signer(transfer_message(slot_id, from_wallet, to_wallet, index), signature)
+    if signer.lower() != str(from_wallet).lower():
+        raise ValueError(
+            f"transfer_signature was made by {signer}, not by the outgoing owner {from_wallet}; "
+            "the block was not released."
+        )
+    return f"released by {signer}"
+
+
+def verify_lineage_chain(dossier: Dict[str, Any]) -> str:
+    """Every entry on record released the block to the owner that followed it
+    (the last one to the current owner). Pure; no chain access."""
+    slot_id = str(dossier.get("slot_id", ""))
+    lineage = dossier.get("ownership_lineage") or []
+    if not isinstance(lineage, list):
+        raise ValueError("ownership_lineage must be an array.")
+    for i, entry in enumerate(lineage):
+        if not isinstance(entry, dict):
+            raise ValueError(f"ownership_lineage[{i}] must be an object.")
+        to = lineage[i + 1].get("wallet_address") if i + 1 < len(lineage) and isinstance(lineage[i + 1], dict) \
+            else dossier.get("wallet_address")
+        try:
+            verify_transfer_release(slot_id, entry.get("wallet_address", ""), to, i, entry.get("transfer_signature"))
+        except ValueError as e:
+            raise ValueError(f"ownership_lineage[{i}]: {e}")
+    return f"{len(lineage)} transfer(s), each released by its outgoing owner" if lineage else "no transfers"
 
 
 # --- Claim files ---------------------------------------------------------------
@@ -147,7 +224,7 @@ def claim_schema(dossier_schema: Dict[str, Any]) -> Dict[str, Any]:
     schema["required"] = [r for r in schema["required"] if r not in ("slot_id", "icon_rel_path")]
     if "claim_signature" not in schema["required"]:
         schema["required"].append("claim_signature")
-    for key in ASSIGNED_FIELDS:
+    for key in ASSIGNED_FIELDS + CLAIM_FORBIDDEN_FIELDS:
         schema["properties"].pop(key, None)
     # The version-conditional signature rule is moot here: always required.
     schema["allOf"] = [rule for rule in schema.get("allOf", [])

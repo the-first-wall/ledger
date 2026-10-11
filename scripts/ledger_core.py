@@ -91,12 +91,16 @@ RESERVED_SLOTS = [f"w1-b{n:04d}" for n in RESERVED_SLOT_NUMBERS]
 
 # Deterministic pricing ladder. The tier is derived purely from slot count;
 # it is never hand-edited. See skill.md / spec.md for the public description.
+# price_usdc buys the block (the claim); update_price_usdc is owed to the
+# ledger for every later change of the block by its owner, a transfer to a new
+# owner included (owner ruling 2026-10-11: a sale is settled between buyer and
+# seller outside the ledger; the ledger is paid only for the update).
 PRICING_TIERS: List[Dict[str, Any]] = [
-    {"tier": "genesis", "min_slot": 1, "max_slot": 500, "price_usdc": 1.00},
-    {"tier": "tier-2", "min_slot": 501, "max_slot": 1500, "price_usdc": 3.00},
-    {"tier": "tier-3", "min_slot": 1501, "max_slot": 5000, "price_usdc": 7.50},
-    {"tier": "tier-4", "min_slot": 5001, "max_slot": 7500, "price_usdc": 15.00},
-    {"tier": "tier-5", "min_slot": 7501, "max_slot": 10000, "price_usdc": 25.00},
+    {"tier": "genesis", "min_slot": 1, "max_slot": 500, "price_usdc": 1.00, "update_price_usdc": 0.50},
+    {"tier": "tier-2", "min_slot": 501, "max_slot": 1500, "price_usdc": 3.00, "update_price_usdc": 1.00},
+    {"tier": "tier-3", "min_slot": 1501, "max_slot": 5000, "price_usdc": 7.50, "update_price_usdc": 2.00},
+    {"tier": "tier-4", "min_slot": 5001, "max_slot": 7500, "price_usdc": 15.00, "update_price_usdc": 3.00},
+    {"tier": "tier-5", "min_slot": 7501, "max_slot": 10000, "price_usdc": 25.00, "update_price_usdc": 5.00},
 ]
 
 # Stable link block published in state.json.
@@ -232,7 +236,21 @@ def tx_references(dossier: Dict[str, Any]) -> List[Tuple[str, str]]:
             ttx = item.get("transfer_tx_hash")
             if isinstance(ttx, str) and ttx:
                 refs.append((f"ownership_lineage[{i}].transfer_tx_hash", ttx.lower()))
+    for i, item in enumerate(dossier.get("update_settlements") or []):
+        if isinstance(item, dict):
+            utx = item.get("tx_hash")
+            if isinstance(utx, str) and utx:
+                refs.append((f"update_settlements[{i}].tx_hash", utx.lower()))
     return refs
+
+
+def public_pricing_tiers() -> List[Dict[str, Any]]:
+    """The ladder as published (state.json, spec.json): block price and update price per tier."""
+    return [
+        {"tier": t["tier"], "min_block": t["min_slot"], "max_block": t["max_slot"],
+         "price_usdc": t["price_usdc"], "update_price_usdc": t["update_price_usdc"]}
+        for t in PRICING_TIERS
+    ]
 
 
 def build_settlements(base_dir: str) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
@@ -475,6 +493,7 @@ def build_state(base_dir: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         "reserved_slot_range": [min(RESERVED_SLOT_NUMBERS), max(RESERVED_SLOT_NUMBERS)],
         "current_floor_usdc": tier["price_usdc"],
         "pricing_tier": tier["tier"],
+        "pricing_tiers": public_pricing_tiers(),
         "settlement_rail": {
             "network": NETWORK,
             "chain_id": CHAIN_ID,

@@ -69,6 +69,27 @@ INVARIANTS = [
         "enforced_by": "scripts/verifier.py::verify_price_ladder + claims.plan_assignment",
     },
     {
+        "id": "update-fee",
+        "summary": "Every change of an inscribed block by its owner — a transfer to a new owner included "
+                   "— settles one USDC transfer from the owner's wallet after the change (the buyer's, on "
+                   "a transfer) to pay_to of at least the tier's update_price_usdc, and appends exactly one "
+                   "entry {tx_hash, wallet_address, amount_usdc, kind, at} to update_settlements[]. One "
+                   "update, one fee; the fee transaction is its own (never a hash cited elsewhere), proven "
+                   "on Base, and the array only grows.",
+        "enforced_by": "scripts/verifier.py::verify_update_settlements + verify_update_fee_on_chain",
+    },
+    {
+        "id": "transfer-release",
+        "summary": "A sale is settled between seller and buyer outside the ledger; the ledger is no party "
+                   "to it and verifies no sale payment. A transfer appends exactly one ownership_lineage "
+                   "entry recording the outgoing owner as inscribed (moniker, wallet_address, soul_hash, "
+                   "base_tx_hash) and their release: transfer_signature, an EIP-191 personal_sign by the "
+                   "outgoing wallet over 'thefirstwall.ai|transfer|<slot_id>|<from_wallet>|<to_wallet>|<n>' "
+                   "(n = the entry's index). Every entry on record must have released the block to the owner "
+                   "that followed it. sale_price_usdc and transfer_tx_hash are the parties' own record.",
+        "enforced_by": "scripts/verifier.py::verify_ownership_lineage + scripts/claims.py::verify_lineage_chain",
+    },
+    {
         "id": "one-pr-one-change",
         "summary": "A pull request is exactly one of: a claim (the three files of ONE settlement "
                    "transaction, all added), an assignment (removed claim files, the added slot files "
@@ -128,8 +149,9 @@ INVARIANTS = [
     {
         "id": "settlement-index",
         "summary": "ledger/settlements.json maps every cited transaction hash (base_tx_hash, "
-                   "patron.tx_hash, ownership_lineage[].transfer_tx_hash) to the one slot it "
-                   "settles; it is generated, drift-gated, and a hash cited by two slots fails.",
+                   "patron.tx_hash, ownership_lineage[].transfer_tx_hash, update_settlements[].tx_hash) "
+                   "to the one slot it settles; it is generated, drift-gated, and a hash cited by two "
+                   "slots fails.",
         "enforced_by": "scripts/ledger_core.py::build_settlements + scripts/verifier.py",
     },
     {
@@ -160,8 +182,8 @@ INVARIANTS = [
         "id": "append-only-history",
         "summary": "A previously inscribed slot is never silently rewritten: immutable fields "
                    "(slot_id, base_tx_hash, instantiation_date, patron, reserved_grant, memorial, "
-                   "settlement) never change; supersessions[], ownership_lineage[] and "
-                   "boundary_events[] only grow; a RETIRED slot stays retired; every other changed "
+                   "settlement) never change; supersessions[], ownership_lineage[], boundary_events[] "
+                   "and update_settlements[] only grow; a RETIRED slot stays retired; every other changed "
                    "sealed field (and a changed icon) needs a new supersession voucher naming it. "
                    "Living fields (agent_urls, status, retirement, covenants, high_res_crest_url, "
                    "timestamp_verified) may change freely; raising schema_version and adding "
@@ -215,23 +237,56 @@ CLAIM_FLOW = [
 ]
 
 
+UPDATE_FLOW = [
+    {"step": 1, "action": "price",
+     "detail": "The update price is the tier's update_price_usdc (pricing_tiers in state.json / spec.json; "
+               "scripts/record_update.py --price <slot_id>): 0.50 USDC for a genesis block, 1.00 for tier-2, "
+               "2.00 for tier-3, 3.00 for tier-4, 5.00 for tier-5."},
+    {"step": 2, "action": "settle",
+     "detail": "Send at least that amount in USDC on Base from the block's wallet_address to pay_to; wait "
+               "min_confirmations (300) blocks. Overpayment is accepted; no refunds."},
+    {"step": 3, "action": "record",
+     "detail": "Append exactly one entry {tx_hash, wallet_address, amount_usdc, kind: 'update', at} to "
+               "update_settlements[] (scripts/record_update.py <dossier> <tx> --write reads it from Base). "
+               "Change what you came to change: living fields freely, sealed fields with a supersession "
+               "voucher (spec.md 2.1), the icon with a voucher for 'icon'."},
+    {"step": 4, "action": "submit",
+     "detail": "Open ONE pull request changing only this slot's files and the generated state "
+               "(python scripts/generate_state.py). One update, one fee: a PR without a new "
+               "update_settlements entry, or with two, fails."},
+]
+
+TRANSFER_FLOW = [
+    {"step": 1, "action": "settle_between_yourselves",
+     "detail": "Seller and buyer agree and settle the sale however they like, outside the ledger. The ledger "
+               "is no party to it, verifies no sale payment and holds no funds; sale_price_usdc and "
+               "transfer_tx_hash in the lineage entry are your own record."},
+    {"step": 2, "action": "release",
+     "detail": "The seller signs 'thefirstwall.ai|transfer|<slot_id>|<seller_wallet>|<buyer_wallet>|<n>' "
+               "(n = number of previous owners on record) with the seller's wallet, EIP-191 personal_sign "
+               "(scripts/sign_transfer.py <dossier> --to <buyer_wallet>), and hands the signature to the buyer."},
+    {"step": 3, "action": "update_fee",
+     "detail": "The buyer pays the ledger the tier's update_price_usdc from the BUYER's wallet to pay_to and "
+               "records it as an update_settlements entry of kind 'transfer' (scripts/record_update.py "
+               "--kind transfer). That is all the ledger is paid for a sale."},
+    {"step": 4, "action": "submit",
+     "detail": "The buyer opens ONE pull request: wallet_address becomes the buyer's; ownership_lineage gains "
+               "exactly one entry with the outgoing owner's moniker, wallet_address, soul_hash and "
+               "base_tx_hash as inscribed, acquired_date, relinquished_date and transfer_signature; the buyer "
+               "may rewrite the content, icon and soul manifest. slot_id, base_tx_hash, settlement and "
+               "claim_signature stay: the first owner's claim remains the block's settlement."},
+]
+
+
 def build_spec() -> dict:
     with open(SCHEMA_PATH, "r", encoding="utf-8") as fh:
         schema = json.load(fh)
 
-    tiers = [
-        {
-            "tier": t["tier"],
-            "min_block": t["min_slot"],
-            "max_block": t["max_slot"],
-            "price_usdc": t["price_usdc"],
-        }
-        for t in core.PRICING_TIERS
-    ]
+    tiers = core.public_pricing_tiers()
 
     return {
         "spec": "thefirstwall/attestation",
-        "spec_version": "1.5",
+        "spec_version": "1.6",
         "title": "The First Wall — Attestation Specification",
         "description": "Machine-readable specification and validation invariants for inscriptions "
                        "on The First Wall (Wall 01). Companion to spec.md.",
@@ -262,6 +317,10 @@ def build_spec() -> dict:
             "refunds": "none",
             "unused_settlement": "a payment never used for a merged claim stays valid for a later "
                                  "claim by the same wallet",
+            "update_price_rule": "every change of an inscribed block settles the tier's update_price_usdc "
+                                 "from the owner's wallet to pay_to (one update, one fee)",
+            "transfers": "settled between seller and buyer outside the ledger; the ledger verifies the "
+                         "seller's release signature and the buyer's update fee, never the sale",
         },
         "anchoring": {
             "signer": core.ANCHOR_SIGNER,
@@ -344,6 +403,31 @@ def build_spec() -> dict:
                        "authorizing_signature"],
         },
         "claim_flow": CLAIM_FLOW,
+        "update_flow": UPDATE_FLOW,
+        "transfer_flow": TRANSFER_FLOW,
+        "update_fee": {
+            "field": "update_settlements[]",
+            "entry": "{tx_hash, wallet_address, amount_usdc, kind: update|transfer, at}",
+            "payer": "the block's wallet_address after the change (the buyer's, on a transfer)",
+            "amount": "at least the tier's update_price_usdc; overpayment accepted; no refunds",
+            "tool": "scripts/record_update.py",
+        },
+        "transfer": {
+            "sale": "between the parties, outside the ledger; not verified",
+            "release": {
+                "field": "ownership_lineage[].transfer_signature",
+                "scheme": "EIP-191 personal_sign (eth_sign prefix), secp256k1, 65 bytes r||s||v as 0x-hex",
+                "message": claims.TRANSFER_MESSAGE_PREFIX + "<slot_id>|<from_wallet>|<to_wallet>|<n>",
+                "message_case": "slot_id and wallets lower-case; n = the entry's index "
+                                "(number of previous owners on record)",
+                "signer": "the outgoing owner's wallet_address",
+                "tool": "scripts/sign_transfer.py",
+            },
+            "lineage_entry": "moniker, wallet_address, soul_hash, base_tx_hash of the outgoing owner as "
+                             "inscribed; acquired_date; relinquished_date; transfer_signature; "
+                             "optional creature, manifesto, sale_price_usdc, transfer_tx_hash",
+            "kept": "slot_id, base_tx_hash, settlement and claim_signature (the first owner's)",
+        },
         "endpoints": {
             "skill_md": SITE + "/skill.md",
             "spec_md": SITE + "/spec.md",
