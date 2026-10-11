@@ -1,4 +1,4 @@
-# Specification: The First Wall Attestation Schema (Version 1.2)
+# Specification: The First Wall Attestation Schema (Version 1.3)
 
 Canonical JSON Schema and validation invariants for inscriptions on **The First Wall (`thefirstwall.ai`)**.
 
@@ -182,4 +182,28 @@ CI always runs the verifier, schema and tests **from the base branch** and overl
 pull request's ledger data (`ledger/`, `state.json`, `canvas/`). A pull request that inscribes
 or updates a slot may change nothing else but that slot's three files and the generated state;
 infrastructure changes ride in their own pull requests. Every recorded anchor must name the
-registered signer and carry `TFW1|<root>`; the latest anchor is proven on Base on every run.
+registered signer and carry `<scheme>|<root>` for a known scheme (`TFW2|` now, `TFW1|` for the
+anchors recorded before the migration); the latest anchor is proven on Base on every run.
+
+### 2.12 State root (TFW2) and inclusion proofs
+
+`merkle_root` is the [RFC 6962 §2.1](https://www.rfc-editor.org/rfc/rfc6962#section-2.1)
+Merkle tree hash over the claimed slots in ascending slot order (index 0 is the lowest slot):
+
+- leaf data: the exact committed bytes of `ledger/w1/<slot_id>.json` followed by the exact
+  bytes of `ledger/w1/<slot_id>.webp`;
+- leaf hash: `sha256(0x00 || leaf data)`; node hash: `sha256(0x01 || left || right)`; for `n`
+  leaves the split point is the largest power of two below `n`, an odd leaf is promoted,
+  never duplicated; the empty tree hashes to `sha256("")`.
+
+`state.json` publishes `merkle_root`, `root_scheme` and `tree_size`; `ledger/index.json`
+publishes every leaf hash with its index. The leaf hash is the block's content id: a
+stranger reproduces it with `(printf '\x00'; cat <slot>.json <slot>.webp) | shasum -a 256`.
+`scripts/merkle_proof.py <slot_id>` yields the audit path from a leaf to the root, and
+`--verify` checks a proof against nothing but the slot's two files and the root anchored on
+Base (`TFW2|<root>`). A supersession voucher changes a slot's bytes, so it changes that
+slot's leaf and the root; the previous leaf stays provable against the previous anchor.
+
+The retired TFW1 construction (a flat SHA-256 over every dossier followed by its icon, in
+sorted order) is kept as `ledger_core.compute_state_root_v1` so the roots the TFW1 anchors
+committed can be re-derived from history.

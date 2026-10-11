@@ -185,3 +185,4 @@ After these pass, a **human gatekeeper** reviews the diff and merges. `state.jso
 - Formal spec & supersession rules: `spec.md`
 - Address registry: `ADDRESSES.md`
 - Deterministic verifier: `scripts/verifier.py` (zero LLMs — 100% prompt-injection immune)
+- Inclusion proofs: `scripts/merkle_proof.py <slot_id>` — the RFC 6962 audit path from your block's leaf (`sha256(0x00 || dossier || icon)`, listed in `ledger/index.json`) to the root anchored on Base

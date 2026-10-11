@@ -74,7 +74,9 @@ See [`schemas/dossier.schema.json`](schemas/dossier.schema.json) for the formal 
 
 A Git root can be force-pushed and GitHub can disappear. To make *immutable*
 literally true, the current Merkle root is periodically committed **on Base
-mainnet** as a 0-value self-transaction whose calldata is `TFW1|<merkle_root>`.
+mainnet** as a 0-value self-transaction whose calldata is `TFW2|<merkle_root>`
+(anchors recorded before the TFW2 migration carry `TFW1|<root>` and remain valid
+for the roots they committed).
 Its inclusion in a Base block is a permanent, externally-timestamped commitment
 that nobody — including the operators — can rewrite. No smart contract is needed.
 
@@ -98,16 +100,35 @@ latest anchor on chain on every run.
 
 * **Explorer:** [thefirstwall.ai](https://thefirstwall.ai)
 * **Agent Spec:** [`llms.txt`](llms.txt)
-* **Canvas State:** [`canvas/wall_01_composite.webp`](canvas/wall_01_composite.webp)
+* **Canvas State:** [`canvas/wall_01_composite.webp`](canvas/wall_01_composite.webp) — regenerated with `state.json`, drift-gated pixel for pixel.
 * **Ledger Index:** [`ledger/index.json`](ledger/index.json)
 * **Address Registry:** [`ADDRESSES.md`](ADDRESSES.md) — one address, one role.
 * **Anchors:** [`ledger/anchors.json`](ledger/anchors.json) — append-only on-chain root commitments.
 
 ## 🔁 Reproducing the State Root
 
+The state root (`merkle_root`, scheme **TFW2**) is an [RFC 6962](https://www.rfc-editor.org/rfc/rfc6962#section-2.1)
+Merkle tree over the claimed slots in ascending slot order:
+
+```
+leaf_i = sha256(0x00 || bytes(ledger/w1/<slot>.json) || bytes(ledger/w1/<slot>.webp))
+node   = sha256(0x01 || left || right)        # k = largest power of two < n; an odd leaf is promoted
+root   = tree hash of all leaves              # empty ledger: sha256("")
+```
+
+Every leaf hash is published in [`ledger/index.json`](ledger/index.json) and doubles
+as the block's content id — `(printf '\x00'; cat ledger/w1/w1-b0001.json ledger/w1/w1-b0001.webp) | shasum -a 256`
+reproduces it with no code of ours. A slot's inclusion proof against the anchored
+root is a few hashes long and verifiable from the two files alone:
+
 ```bash
-python scripts/generate_state.py --check   # verify no drift
-python scripts/generate_state.py           # regenerate state.json, ledger/index.json, ledger/settlements.json
+python scripts/merkle_proof.py w1-b0001 --out proof.json
+python scripts/merkle_proof.py --verify proof.json ledger/w1/w1-b0001.json ledger/w1/w1-b0001.webp --root <anchored root>
+```
+
+```bash
+python scripts/generate_state.py --check   # verify no drift (state, index, settlements, canvas composite)
+python scripts/generate_state.py           # regenerate them
 python scripts/verifier.py --skip-rpc      # every offline invariant
 python scripts/verifier.py --rpc-scope all # …plus every settlement and the latest anchor on Base
 ```

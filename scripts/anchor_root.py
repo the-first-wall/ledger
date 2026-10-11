@@ -11,7 +11,7 @@ operators — can rewrite.
 Design
 ------
 * **No smart contract required.** The anchor is a 0-value self-transaction whose
-  calldata is ``TFW1|<merkle_root>`` (ASCII). Its inclusion in a Base block is a
+  calldata is ``TFW2|<merkle_root>`` (ASCII). Its inclusion in a Base block is a
   permanent, verifiable, timestamped commitment to that exact root.
 * **Append-only record.** Every successful anchor is appended to
   ``ledger/anchors.json`` (never edited, never deleted), so the anchoring history
@@ -47,7 +47,7 @@ STATE_PATH = os.path.join(BASE_DIR, "state.json")
 ANCHORS_PATH = os.path.join(BASE_DIR, "ledger", "anchors.json")
 
 CHAIN_ID = core.CHAIN_ID
-MAGIC = "TFW1|"
+MAGIC = core.ANCHOR_MAGIC   # "TFW2|" — the scheme of the root being committed
 GAS_LIMIT_BUFFER = 10_000
 RECEIPT_POLLS = 30
 RECEIPT_POLL_SECONDS = 2
@@ -56,7 +56,7 @@ RECEIPT_POLL_SECONDS = 2
 # --- Payload & local records -------------------------------------------------
 
 def anchor_payload(root: str) -> str:
-    """The exact ASCII calldata committed on-chain: `TFW1|<root>`."""
+    """The exact ASCII calldata committed on-chain: `TFW2|<root>`."""
     return f"{MAGIC}{root}"
 
 
@@ -107,7 +107,8 @@ def do_dry_run(state: Dict[str, Any]) -> int:
 def do_check(state: Dict[str, Any], on_chain: bool = False) -> int:
     """--check: is the live root the latest recorded anchor?
     --check-anchor: additionally prove the recorded anchor on Base itself
-    (tx exists, succeeded, sent by the registered signer, carries TFW1|<root>).
+    (tx exists, succeeded, sent by the registered signer, carries <scheme>|<root>
+    for the scheme the record names).
     anchors.json is only a record; the chain is the witness."""
     anchors = load_anchors()
     root = state["merkle_root"]
@@ -225,6 +226,7 @@ def do_send(state: Dict[str, Any], key: str, wait: bool) -> int:
         "wall_id": state.get("wall_id", "wall_01"),
         "chain_id": CHAIN_ID,
         "root": root,
+        "root_scheme": core.ROOT_SCHEME,
         "payload": payload,
         "signer": signer,
         "tx_hash": tx_hash,

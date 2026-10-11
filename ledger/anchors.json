@@ -29,7 +29,7 @@
     "signer": "0x39A8546448baFd5E98f513022A772555c2082465",
     "tx_hash": "0x7fd6478d7aae214a332c0ec8cdea318e9146574bbe9127ecee5a8307b9adcbd2",
     "block_number": 52428642,
-    "anchored_at": "",
+    "anchored_at": "2026-10-10T15:37:11Z",
     "recorded_by": "scripts/anchor_root.py"
   }
 ]

@@ -5,7 +5,8 @@ The First Wall — Shared Deterministic Ledger Core
 
 Single source of truth for:
   * which files constitute the ledger,
-  * how the Merkle state root is computed,
+  * how the Merkle state root (TFW2, an RFC 6962 tree over the slots) is
+    computed and how an inclusion proof for one slot is built and verified,
   * how `state.json`, `ledger/index.json` and `ledger/settlements.json` are derived,
   * the hard bounds the verifier enforces (slot ids, file sizes, icon shape,
     settlement finality, anchor signer).
@@ -65,7 +66,14 @@ PAY_TO = "0xbbF4D6B954e97C2C4fbC4e89B7933cDD7e4D9f23"
 # anchor transaction is authentic only if it was sent by this gas-only signer;
 # the verifier checks every recorded anchor against the chain.
 ANCHOR_SIGNER = "0x39A8546448baFd5E98f513022A772555c2082465"
-ANCHOR_MAGIC = "TFW1|"
+# The scheme of the root committed on chain. TFW2 is an RFC 6962 Merkle tree
+# over the slots (see "TFW2 state root" below), so every slot has an inclusion
+# proof against the anchored root. TFW1 was a flat SHA-256 over the concatenated
+# files; the anchors recorded under it stay valid for the roots they committed.
+ROOT_SCHEME = "TFW2"
+ANCHOR_MAGIC = ROOT_SCHEME + "|"
+LEGACY_ANCHOR_MAGICS = ("TFW1|",)
+ANCHOR_MAGICS = (ANCHOR_MAGIC,) + LEGACY_ANCHOR_MAGICS
 
 SETTLEMENT_RAIL_LABEL = "Base mainnet (USDC x402)"
 
@@ -98,8 +106,11 @@ LINKS = {
     "ledger_repo": "https://github.com/the-first-wall/ledger",
 }
 
-# Fallback when the ledger is empty (deterministic, not wall-clock).
-EMPTY_ROOT = "0" * 64
+# Root of an empty ledger: the RFC 6962 hash of the empty tree, SHA-256("").
+EMPTY_ROOT = hashlib.sha256(b"").hexdigest()
+
+# Background of the canvas composite (the site background, #08090d).
+CANVAS_BG = (8, 9, 13)
 
 # Public Base mainnet RPC endpoints, tried in order. Shared by the verifier and
 # the root-anchoring tool so both speak to the chain identically.
@@ -153,6 +164,12 @@ def slot_number(slot_id: str) -> int:
 
 def slot_id_for(n: int) -> str:
     return f"w1-b{n:04d}"
+
+
+def block_coordinate(number: int) -> Tuple[int, int]:
+    """(x, y) block coordinate on the 100x100 grid: blocks fill row by row."""
+    idx = number - 1
+    return idx % 100, idx // 100
 
 
 # --- Discovery --------------------------------------------------------------
@@ -253,11 +270,25 @@ def build_settlements(base_dir: str) -> Tuple[Dict[str, Any], List[Dict[str, Any
 
 # --- Anchor verification -----------------------------------------------------
 
+def anchor_payload_of(entry: Dict[str, Any]) -> str:
+    """The calldata an anchor record commits to: `<scheme>|<root>` for a known
+    scheme (TFW2 now, TFW1 for the anchors recorded before the migration).
+    Raises ValueError for anything else."""
+    root = str(entry.get("root", ""))
+    payload = str(entry.get("payload") or (ANCHOR_MAGIC + root))
+    if not any(payload == magic + root for magic in ANCHOR_MAGICS):
+        known = ", ".join(m[:-1] for m in ANCHOR_MAGICS)
+        raise ValueError(f"anchor payload {payload!r} is not <scheme>|<root> for a known scheme ({known})")
+    return payload
+
+
 def verify_anchor_on_chain(entry: Dict[str, Any], rpc=None) -> str:
     """A recorded anchor must exist on Base, be a successful self-send from the
-    registered signer, and carry exactly `TFW1|<root>` as calldata. Shared by
-    the verifier and `anchor_root.py --check-anchor`."""
+    registered signer, and carry exactly `<scheme>|<root>` as calldata (the
+    scheme the record names: TFW2, or TFW1 for pre-migration anchors). Shared
+    by the verifier and `anchor_root.py --check-anchor`."""
     rpc = rpc or rpc_call
+    expected = anchor_payload_of(entry)
     tx_hash = str(entry.get("tx_hash", ""))
     tx = rpc("eth_getTransactionByHash", [tx_hash])
     if not tx:
@@ -275,7 +306,6 @@ def verify_anchor_on_chain(entry: Dict[str, Any], rpc=None) -> str:
         ascii_payload = bytes.fromhex(calldata[2:]).decode("ascii")
     except Exception:
         raise ValueError(f"anchor tx {tx_hash} calldata is not ASCII")
-    expected = ANCHOR_MAGIC + str(entry.get("root"))
     if ascii_payload != expected:
         raise ValueError(f"anchor tx {tx_hash} carries {ascii_payload!r}, expected {expected!r}")
     block = int(receipt.get("blockNumber", "0x0"), 16)
@@ -286,23 +316,117 @@ def verify_anchor_on_chain(entry: Dict[str, Any], rpc=None) -> str:
 
 # --- Root & state derivation ------------------------------------------------
 
-def compute_merkle_root(slot_dir: str, slots: List[str]) -> str:
-    """Deterministic state root: SHA-256 over, for each slot in sorted order,
-    the exact bytes of its dossier JSON followed by the exact bytes of its icon
-    (when the icon file exists).
+# --- TFW2 state root: an RFC 6962 Merkle tree over the slots ------------------
+#
+#   leaf data   d_i  = bytes(ledger/w1/<slot>.json) || bytes(ledger/w1/<slot>.webp)
+#   leaf hash        = SHA-256(0x00 || d_i)
+#   node hash        = SHA-256(0x01 || left || right)
+#   tree hash        = RFC 6962 §2.1 (k = largest power of two < n; an odd leaf is
+#                      promoted, never duplicated); empty tree = SHA-256("")
+#   leaves           = claimed slots in ascending slot order (index 0 = lowest)
+#
+# The leaf hash is also the block's content id: anyone recomputes it with
+# `(printf '\x00'; cat <slot>.json <slot>.webp) | shasum -a 256`, and
+# `scripts/merkle_proof.py` yields the audit path from that leaf to the root
+# committed on Base. The sorted leaf list is published in ledger/index.json.
 
-    NOTE: this is a flat hash, not a Merkle tree; per-record inclusion proofs
-    are not possible with it. Changing the construction (TFW2) is a tracked
-    decision and must be versioned in the anchor calldata when it happens."""
+def leaf_data(slot_dir: str, slot_file: str) -> bytes:
+    """What one slot commits to: the exact dossier bytes followed by the exact
+    icon bytes (when the icon file exists)."""
+    dossier = load_dossier(slot_dir, slot_file)
+    with open(os.path.join(slot_dir, slot_file), "rb") as fh:
+        data = fh.read()
+    icon = icon_path_for(slot_dir, dossier)
+    if os.path.exists(icon):
+        with open(icon, "rb") as fh:
+            data += fh.read()
+    return data
+
+
+def leaf_hash(data: bytes) -> bytes:
+    return hashlib.sha256(b"\x00" + data).digest()
+
+
+def node_hash(left: bytes, right: bytes) -> bytes:
+    return hashlib.sha256(b"\x01" + left + right).digest()
+
+
+def _split(n: int) -> int:
+    """RFC 6962: the largest power of two strictly smaller than n (n >= 2)."""
+    k = 1
+    while k * 2 < n:
+        k *= 2
+    return k
+
+
+def merkle_tree_hash(leaves: List[bytes]) -> bytes:
+    """RFC 6962 §2.1 Merkle Tree Hash over a list of leaf hashes."""
+    n = len(leaves)
+    if n == 0:
+        return hashlib.sha256(b"").digest()
+    if n == 1:
+        return leaves[0]
+    k = _split(n)
+    return node_hash(merkle_tree_hash(leaves[:k]), merkle_tree_hash(leaves[k:]))
+
+
+def inclusion_path(leaves: List[bytes], index: int) -> List[bytes]:
+    """RFC 6962 §2.1.1 audit path for leaves[index]: the sibling hashes from the
+    leaf up to the root, bottom first."""
+    n = len(leaves)
+    if not 0 <= index < n:
+        raise ValueError(f"leaf index {index} outside tree of size {n}")
+    if n == 1:
+        return []
+    k = _split(n)
+    if index < k:
+        return inclusion_path(leaves[:k], index) + [merkle_tree_hash(leaves[k:])]
+    return inclusion_path(leaves[k:], index - k) + [merkle_tree_hash(leaves[:k])]
+
+
+def root_from_path(leaf: bytes, index: int, tree_size: int, path: List[bytes]) -> bytes:
+    """Recompute the root from a leaf hash and its audit path (RFC 9162
+    §2.1.3.2). Raises ValueError when the path cannot belong to that position."""
+    if not 0 <= index < tree_size:
+        raise ValueError(f"leaf index {index} outside tree of size {tree_size}")
+    fn, sn = index, tree_size - 1
+    r = leaf
+    for p in path:
+        if sn == 0:
+            raise ValueError("inclusion path is longer than the tree is deep")
+        if fn & 1 or fn == sn:
+            r = node_hash(p, r)
+            if not fn & 1:
+                while not fn & 1 and fn != 0:
+                    fn >>= 1
+                    sn >>= 1
+        else:
+            r = node_hash(r, p)
+        fn >>= 1
+        sn >>= 1
+    if sn != 0:
+        raise ValueError("inclusion path is shorter than the tree is deep")
+    return r
+
+
+def compute_leaves(slot_dir: str, slots: List[str]) -> List[Tuple[str, bytes]]:
+    """[(slot_id, leaf_hash)] in tree order (ascending slot number)."""
+    ordered = sorted(slots, key=lambda f: slot_number(f[:-5]))
+    return [(f[:-5], leaf_hash(leaf_data(slot_dir, f))) for f in ordered]
+
+
+def compute_merkle_root(slot_dir: str, slots: List[str]) -> str:
+    """The TFW2 state root: hex RFC 6962 tree hash over the slot leaves."""
+    return merkle_tree_hash([h for _, h in compute_leaves(slot_dir, slots)]).hex()
+
+
+def compute_state_root_v1(slot_dir: str, slots: List[str]) -> str:
+    """The retired TFW1 construction (flat SHA-256 over every dossier followed
+    by its icon, in sorted order), kept so the roots the TFW1 anchors committed
+    can be re-derived from history."""
     hasher = hashlib.sha256()
-    for slot_file in slots:
-        dossier = load_dossier(slot_dir, slot_file)
-        with open(os.path.join(slot_dir, slot_file), "rb") as fh:
-            hasher.update(fh.read())
-        icon = icon_path_for(slot_dir, dossier)
-        if os.path.exists(icon):
-            with open(icon, "rb") as fh:
-                hasher.update(fh.read())
+    for slot_file in sorted(slots):
+        hasher.update(leaf_data(slot_dir, slot_file))
     return hasher.hexdigest()
 
 
@@ -348,10 +472,8 @@ def build_state(base_dir: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     # skips `reserved_slots` must never skip a block that is already inscribed.
     reserved_unclaimed = [slot_id_for(n) for n in RESERVED_SLOT_NUMBERS if n not in claimed_numbers]
 
-    if slots:
-        root = compute_merkle_root(slot_dir, slots)
-    else:
-        root = EMPTY_ROOT
+    leaves = compute_leaves(slot_dir, slots)
+    root = merkle_tree_hash([h for _, h in leaves]).hex()
 
     state = {
         "wall_id": WALL_ID,
@@ -372,6 +494,8 @@ def build_state(base_dir: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         },
         "min_confirmations": MIN_CONFIRMATIONS,
         "merkle_root": root,
+        "root_scheme": ROOT_SCHEME,
+        "tree_size": claimed,
         "last_updated": _latest_timestamp(slot_dir, slots),
         "links": LINKS,
     }
@@ -382,6 +506,13 @@ def build_state(base_dir: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         "total_slots": TOTAL_SLOTS,
         "claimed_slots": claimed,
         "merkle_root": root,
+        "root_scheme": ROOT_SCHEME,
+        "tree_size": claimed,
+        "leaf_hash": "sha256(0x00 || dossier_bytes || icon_bytes)",
+        "leaves": [
+            {"index": i, "slot_id": slot_id, "leaf_hash": h.hex()}
+            for i, (slot_id, h) in enumerate(leaves)
+        ],
         "settlement_rail": SETTLEMENT_RAIL_LABEL,
         "genesis_tier_floor_usdc": GENESIS_TIER_FLOOR_USDC,
     }
