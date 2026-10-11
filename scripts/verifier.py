@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-The First Wall — Deterministic Offline Verifier Engine (v1.4)
+The First Wall — Deterministic Offline Verifier Engine (v1.5)
 Zero LLMs. 100% prompt injection immune.
 
 Invariants Enforced:
@@ -861,8 +861,7 @@ def verify_anchor_record(entry: dict) -> str:
     root = str(entry.get("root", ""))
     if not re.match(r"^[a-f0-9]{64}$", root):
         raise ValueError(f"anchor root {root!r} is not a 64-hex digest")
-    if entry.get("payload") != core.ANCHOR_MAGIC + root:
-        raise ValueError(f"anchor payload must be {core.ANCHOR_MAGIC}<root>")
+    core.anchor_payload_of(entry)   # <scheme>|<root> for a known scheme
     if str(entry.get("signer", "")).lower() != core.ANCHOR_SIGNER.lower():
         raise ValueError(
             f"anchor signer {entry.get('signer')} is not the registered anchor signer {core.ANCHOR_SIGNER}"
@@ -877,7 +876,7 @@ def verify_anchor_record(entry: dict) -> str:
 
 def verify_anchor_on_chain(entry: dict, *, rpc: RpcFn = rpc_call) -> str:
     """The recorded anchor must exist on Base, be a successful self-send from the
-    registered signer, and carry exactly TFW1|<root> as calldata."""
+    registered signer, and carry exactly <scheme>|<root> as calldata."""
     return core.verify_anchor_on_chain(entry, rpc)
 
 

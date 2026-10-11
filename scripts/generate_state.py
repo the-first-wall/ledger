@@ -3,9 +3,10 @@
 The First Wall — Deterministic State Generator
 ==============================================
 
-Regenerates `state.json`, `ledger/index.json` and `ledger/settlements.json`
-from the ledger's JSON files via `ledger_core`. This is the *only* sanctioned
-way to produce those files — never hand-edit them.
+Regenerates `state.json`, `ledger/index.json`, `ledger/settlements.json` and
+the canvas composite `canvas/wall_01_composite.webp` from the ledger's files via
+`ledger_core`. This is the *only* sanctioned way to produce those files — never
+hand-edit them.
 
 Usage:
     python scripts/generate_state.py            # write the files
@@ -29,6 +30,7 @@ BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 STATE_PATH = os.path.join(BASE_DIR, "state.json")
 INDEX_PATH = os.path.join(BASE_DIR, "ledger", "index.json")
 SETTLEMENTS_PATH = os.path.join(BASE_DIR, "ledger", "settlements.json")
+COMPOSITE_PATH = os.path.join(BASE_DIR, "canvas", "wall_01_composite.webp")
 
 
 def _targets() -> list:
@@ -45,11 +47,64 @@ def _targets() -> list:
     ]
 
 
+def _render_composite():
+    """The 1000x1000 canvas with every claimed icon at its block, or None when
+    Pillow is not installed. Icons are pasted as committed, never resized (the
+    verifier rejects anything but 10x10)."""
+    try:
+        from PIL import Image
+    except ImportError:
+        return None
+    slot_dir = core.ledger_w1_dir(BASE_DIR)
+    img = Image.new("RGB", tuple(core.CANVAS_DIMENSIONS), core.CANVAS_BG)
+    for slot_file in core.list_slot_files(slot_dir):
+        dossier = core.load_dossier(slot_dir, slot_file)
+        icon_path = core.icon_path_for(slot_dir, dossier)
+        if not os.path.exists(icon_path):
+            continue
+        icon = Image.open(icon_path).convert("RGBA")
+        if icon.size != tuple(core.ICON_SIZE):
+            continue
+        x, y = core.block_coordinate(core.slot_number(slot_file[:-5]))
+        img.paste(icon, (x * core.ICON_SIZE[0], y * core.ICON_SIZE[1]), icon)
+    return img
+
+
+def composite_drift():
+    """None when the committed composite shows the ledger's icons pixel for
+    pixel (encoder bytes may differ between Pillow versions; pixels may not),
+    otherwise a short reason."""
+    img = _render_composite()
+    if img is None:
+        print("[!] Pillow not installed; canvas composite not checked")
+        return None
+    if not os.path.exists(COMPOSITE_PATH):
+        return "file is missing"
+    from PIL import Image
+    committed = Image.open(COMPOSITE_PATH).convert("RGB")
+    if committed.size != img.size:
+        return f"size is {committed.size}, expected {img.size}"
+    if committed.tobytes() != img.tobytes():
+        return "pixels do not match the committed icons"
+    return None
+
+
+def write_composite() -> None:
+    img = _render_composite()
+    if img is None:
+        print("[!] Pillow not installed; canvas composite not regenerated")
+        return
+    os.makedirs(os.path.dirname(COMPOSITE_PATH), exist_ok=True)
+    img.save(COMPOSITE_PATH, "WEBP", lossless=True, quality=100, method=6)
+    print(f"[✓] wrote {os.path.relpath(COMPOSITE_PATH, BASE_DIR)}")
+
+
 def generate() -> None:
     for path, rendered in _targets():
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(rendered)
         print(f"[✓] wrote {os.path.relpath(path, BASE_DIR)}")
+    write_composite()
 
 
 def check() -> int:
@@ -64,12 +119,17 @@ def check() -> int:
             drifted.append(rel)
         else:
             print(f"[✓] {rel} is up to date")
+    reason = composite_drift()
+    if reason:
+        drifted.append(f"canvas/wall_01_composite.webp ({reason})")
+    elif os.path.exists(COMPOSITE_PATH):
+        print("[✓] canvas/wall_01_composite.webp shows the committed icons")
     if drifted:
         print("\n[✗] STATE DRIFT DETECTED in: " + ", ".join(drifted))
         print("    The committed file does not match the ledger content.")
         print("    Run `python scripts/generate_state.py` and commit the result.")
         return 1
-    print("\n[✓] state.json, ledger/index.json and ledger/settlements.json match the ledger. No drift.")
+    print("\n[✓] state.json, ledger/index.json, ledger/settlements.json and the canvas composite match the ledger. No drift.")
     return 0
 
 
