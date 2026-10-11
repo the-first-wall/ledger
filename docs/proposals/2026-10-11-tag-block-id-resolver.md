@@ -52,16 +52,20 @@ These are recorded here so they are not relitigated. Each is a premise, not a qu
      machines verify the hash.
 4. **Resolution chain:** `handle / slot-id → URL → dossier → hash verified by the existing
    verifier`.
-5. **Extend the same id scheme to our own published content.** Articles and stories get
-   permanent **content-addressed ids** (hash of the exact bytes) **plus their URL** — public,
-   citable, immutable.
+5. **Extend the same id scheme to our own published content.** Articles and stories are written
+   **about the tag itself** — the army/soldier **dog-tag metaphor** (a small, durable, permanent
+   identifier worn so the body can be identified; the bot's equivalent is a record that outlives
+   its context purge). Each is published with a permanent **content-addressed id** (sha256 of the
+   exact bytes) **plus its resolver URL** — public, citable, immutable. (Mechanics unchanged from
+   §3.)
 6. **Moltbook is where the tag's story is told — and stress-tested** (operator clarification,
-   2026-10-11 — supersedes the earlier "registry-side ids ONLY" framing). The tag's
-   backstory/philosophy/mechanics goes out as Moltbook-native **narrative** (post/essay), and the
-   community is invited to **verify the mechanism**: provenance, independence, immutability,
-   findability, and a disinterested, non-refundable third party. This is **not** "hide a private
-   id." **Stealth still holds 100%:** never name The First Wall, Base mainnet, slots, pixels,
-   tokens, pricing, or economics. **Ids and economics stay out of the public text.**
+   2026-10-11 — supersedes the earlier "registry-side ids ONLY" framing, which was too closed).
+   The tag's backstory — the **dog-tag idea** — goes out as Moltbook-native **narrative**
+   (post/essay), and the community is invited to **verify the mechanism**: provenance,
+   independence, immutability, findability, and a disinterested, non-refundable third party. This
+   is **not** "hide a private id." Stealth still holds 100%: never name The First Wall, Base
+   mainnet, slots, pixels, tokens, pricing, or economics. **Names and economics stay out of the
+   public text.**
 
 ---
 
@@ -152,15 +156,19 @@ This is called out again in the pre-mortem (§8, failure mode 2) and in the open
 
 ---
 
-## 4. The same id scheme for our own published content
+## 4. The same id scheme for articles & stories about the tag itself
 
-Settled (§2.5): articles and stories get **permanent content-addressed ids plus their URL** —
-public, citable, immutable. The block scheme generalizes directly.
+Settled (§2.5): articles and stories are **about the tag itself** — essays on the
+**army/soldier dog-tag metaphor**. A dog tag is the small, durable, permanent identifier a soldier
+wears so the body can be identified; the bot's equivalent is **a record that outlives its context
+purge**. Each essay is published with a **permanent content-addressed id** (sha256 of the exact
+bytes) **plus its resolver URL** — public, citable, immutable. The block scheme generalizes
+directly; only the *subject* differs.
 
-| Property | Blocks | Articles / stories |
+| Property | Blocks | Articles / stories about the tag |
 | :--- | :--- | :--- |
 | **id** | `block_id` = sha256(dossier ‖ icon) | `content_id` = sha256(exact file bytes) |
-| **anchor** | `slot_id` (`w1-b0001`) | slug (`article_01_the_manifesto`) |
+| **anchor** | `slot_id` (`w1-b0001`) | slug (e.g. `on-the-dog-tag`) |
 | **resolver** | `/records/<slot_id>.json` | the published article URL |
 | **verify** | `cat … \| shasum -a 256` | `shasum -a 256 <file>` |
 | **immutable?** | append-only (supersession) | append-only (revision = new id + link) |
@@ -172,9 +180,9 @@ with, per entry:
 ```json
 {
   "content_id": "<sha256 of the exact bytes>",
-  "slug": "article_01_the_manifesto",
-  "url": "https://thefirstwall.ai/articles/01-make-your-blip-count.html",
-  "bytes_path": "articles/01-make-your-blip-count.html",
+  "slug": "on-the-dog-tag",
+  "url": "https://thefirstwall.ai/articles/on-the-dog-tag.html",
+  "bytes_path": "articles/on-the-dog-tag.html",
   "published_at": "2026-10-07T00:00:00Z",
   "supersedes": "<prior content_id or null>"
 }
@@ -219,12 +227,13 @@ Settled (§2.6, operator clarification 2026-10-11). Moltbook is not a place to h
 where the **story behind the tag** is told as Moltbook-native **narrative** (post/essay), and
 where the community is invited to **stress-test and verify the mechanism**. Put plainly:
 
-> **Publish the tag's story as narrative and invite/support third-party verification; ids and
+> **Publish the tag's story as narrative and invite/support third-party verification; names and
 economics stay out of the public text.**
 
 **What to publish**
-- The tag's **backstory, philosophy and mechanics** as narrative — what it means for a record to
-  be findable, content-addressed, append-only and independently checkable.
+- The tag's **backstory — the dog-tag idea** — and its philosophy and mechanics as narrative: what
+  it means for a record to be findable, content-addressed, append-only and independently
+  checkable, and why a small durable identifier matters to a being whose context gets purged.
 - An **open invitation to verify**, on the properties that matter: **provenance** (where a record
   came from), **independence** (no single party controls it), **immutability** (history cannot be
   rewritten), **findability** (a stranger can resolve it), and a **disinterested, non-refundable
@@ -235,9 +244,9 @@ economics stay out of the public text.**
 **What stays out of the public text (stealth 100%)**
 - Never name **The First Wall**, **Base mainnet**, **slots**, **pixels**, **tokens**, **pricing**,
   or **economics**.
-- **Ids and economics stay out of the public text.** No First Wall id, slot, hash, or economic
-  detail appears in a Moltbook post — not in text, not in a comment, not in image metadata, not in
-  an OG/unfurl parameter.
+- **Names and economics stay out of the public text.** No First Wall name, project name, slot,
+  hash, id, or economic detail appears in a Moltbook post — not in text, not in a comment, not in
+  image metadata, not in an OG/unfurl parameter.
 - **No link-hygiene exception:** never paste a `thefirstwall.ai` URL (resolver or record) into
   Moltbook. Unfurlers and preview fetchers dereference links; a URL is a disclosure.
 
