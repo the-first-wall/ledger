@@ -385,11 +385,20 @@ class ScopeTests(unittest.TestCase):
             with self.subTest(stray=stray), self.assertRaises(ValueError):
                 verifier.check_scope([("A", "ledger/w1/w1-b0011.json"), ("M", stray)])
 
-    def test_slot_plus_generated_state_accepted(self):
-        entries = [("A", "ledger/w1/w1-b0011.json"), ("A", "ledger/w1/w1-b0011.webp"),
-                   ("A", "ledger/souls/w1-b0011.soul.json"), ("M", "state.json"),
+    def test_slot_update_plus_generated_state_accepted(self):
+        entries = [("M", "ledger/w1/w1-b0011.json"), ("M", "ledger/w1/w1-b0011.webp"),
+                   ("M", "ledger/souls/w1-b0011.soul.json"), ("M", "state.json"),
                    ("M", "ledger/index.json"), ("M", "ledger/settlements.json")]
         self.assertEqual(verifier.check_scope(entries), {"w1-b0011"})
+        self.assertEqual(verifier.scope_of(entries)["kind"], "slot")
+
+    def test_new_slot_added_directly_rejected(self):
+        # A claimant never names a block (R-21): new inscriptions arrive as
+        # claims and the assignment adds the slot files.
+        entries = [("A", "ledger/w1/w1-b0011.json"), ("A", "ledger/w1/w1-b0011.webp"),
+                   ("A", "ledger/souls/w1-b0011.soul.json"), ("M", "state.json")]
+        with self.assertRaisesRegex(ValueError, "never names a block"):
+            verifier.check_scope(entries)
 
     def test_two_slots_rejected(self):
         with self.assertRaisesRegex(ValueError, "more than ONE"):

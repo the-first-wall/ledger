@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-The First Wall — Deterministic Offline Verifier Engine (v1.5)
+The First Wall — Deterministic Offline Verifier Engine (v1.6)
 Zero LLMs. 100% prompt injection immune.
 
 Invariants Enforced:
  1. Base Mainnet RPC Verification (USDC transfer, sender & recipient match,
-    confirmation depth >= MIN_CONFIRMATIONS).
- 2. PR Scope Containment (at most ONE slot altered; slot files never deleted;
-    a slot PR touches nothing but that slot's files and generated state).
+    amount >= the tier price of the block, confirmation depth >= MIN_CONFIRMATIONS).
+ 2. PR Scope Containment (a PR posts ONE claim, or updates ONE slot, or is the
+    assignment that turns pending claims into slots, or is infrastructure;
+    slot files are never deleted; a merged claim is never edited).
  3. Slot identity (file name == slot_id == icon basename == soul manifest name;
     block number within 1..10000).
  4. Append-only history (sealed fields change only with a supersession voucher;
@@ -21,6 +22,13 @@ Invariants Enforced:
  9. State-root integrity (state.json, index.json, settlements.json equal their derivation).
 10. Anchor integrity (recorded anchors exist on chain, were sent by the registered
     signer, and carry the recorded root).
+11. Claim signature (a dossier is bound to its payment by an EIP-191 signature of
+    the paying wallet over thefirstwall.ai|claim|<base_tx_hash>|<soul_hash>).
+12. System assignment (a claimant never names a block: claims are placed in
+    settlement order into the lowest free block their payment covers, and the
+    verifier re-derives that placement).
+13. Price ladder (the payment is at least the tier price of the assigned block;
+    overpayment is accepted and never refunded).
 
 The verifier never writes to the checkout it verifies.
 """
@@ -43,6 +51,7 @@ from PIL import Image
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ledger_core as core  # noqa: E402
 import content_safety as safety  # noqa: E402
+import claims  # noqa: E402
 
 BASE_CHAIN_ID = 8453
 USDC_BASE_CONTRACT = core.USDC_CONTRACT.lower()
@@ -63,6 +72,11 @@ with open(_SCHEMA_PATH, "r", encoding="utf-8") as _sf:
 _SCHEMA_VALIDATOR = jsonschema.Draft202012Validator(
     DOSSIER_SCHEMA, format_checker=jsonschema.FormatChecker()
 )
+# A claim is the same dossier before the system adds the block (claims.claim_schema).
+CLAIM_SCHEMA = claims.claim_schema(DOSSIER_SCHEMA)
+_CLAIM_VALIDATOR = jsonschema.Draft202012Validator(
+    CLAIM_SCHEMA, format_checker=jsonschema.FormatChecker()
+)
 
 # Shared JSON-RPC client with endpoint failover — single source of truth in
 # ledger_core, so the verifier and the root-anchoring tool speak identically.
@@ -78,6 +92,7 @@ RpcFn = Callable[[str, list], Any]
 SLOT_FILE_RE = re.compile(r"^ledger/w1/(w1-b(?:\d{4}|10000))\.json$")
 ICON_FILE_RE = re.compile(r"^ledger/w1/(w1-b(?:\d{4}|10000))\.webp$")
 SOUL_FILE_RE = re.compile(r"^ledger/souls/(w1-b(?:\d{4}|10000))\.soul\.json$")
+CLAIM_FILE_RES = (claims.CLAIM_FILE_RE, claims.CLAIM_ICON_RE, claims.CLAIM_SOUL_RE)
 # Files the generator rewrites whenever a slot lands; a slot PR must carry them.
 GENERATED_PATHS = {
     "state.json",
@@ -104,7 +119,7 @@ def changed_entries(rng: Optional[str] = None) -> Optional[List[Tuple[str, str]]
     rng = rng or diff_range()
     try:
         res = subprocess.run(
-            ["git", "diff", "--name-status", rng],
+            ["git", "diff", "--no-renames", "--name-status", rng],
             capture_output=True, text=True, check=True,
         )
     except Exception:
@@ -126,55 +141,158 @@ def slot_paths_for(slot_id: str) -> Set[str]:
     }
 
 
-def check_scope(entries: List[Tuple[str, str]]) -> Set[str]:
-    """Pure containment rule over a list of (status, path).
+def scope_of(entries: List[Tuple[str, str]]) -> Dict[str, Any]:
+    """Pure containment rule over a list of (status, path). Classifies the
+    change and returns {"kind", "slots", "claims", "assigned"}:
 
-    * slot dossiers, icons and soul manifests are never deleted;
-    * at most ONE slot is touched;
-    * when a slot is touched, nothing outside that slot's own files and the
-      generated state files may change — scripts/, schemas/, .github/, docs
-      and other slots ride in their own PRs, reviewed on their own.
-    Returns the set of slot ids touched (empty for an infra-only PR)."""
-    touched: Set[str] = set()
+    * "claim"      — a claim is posted: exactly the files of ONE settlement
+                     transaction (ledger/claims/<tx>.json, .webp, .soul.json),
+                     all added, nothing else. A merged claim is never edited:
+                     it is placed by the assignment, or it waits.
+    * "assignment" — pending claims become slots: the removed claim files, the
+                     added slot files (any number; never a modified slot) and
+                     the generated state, nothing else. verify_assignment
+                     proves the mapping and the order.
+    * "slot"       — an owner updates ONE existing slot: that slot's files and
+                     the generated state, nothing else. A new inscription is
+                     never added directly: it arrives as a claim and the
+                     system assigns its block.
+    * "infra"      — scripts/, schemas/, .github/, docs: no slot and no claim
+                     is touched.
+    Slot dossiers, icons and soul manifests are never deleted; a claim file is
+    deleted only by the assignment that places it."""
+    slots: Set[str] = set()
+    slot_status: Dict[str, Set[str]] = {}
+    claims_added: Set[str] = set()
+    claims_deleted: Set[str] = set()
+    claims_modified: Set[str] = set()
     paths: List[str] = []
     for status, path in entries:
+        paths.append(path)
         for rx in (SLOT_FILE_RE, ICON_FILE_RE, SOUL_FILE_RE):
             m = rx.match(path)
             if m:
                 if status.startswith("D"):
                     raise ValueError(f"PR Boundary Violation: {path} may never be deleted.")
-                touched.add(m.group(1))
-        paths.append(path)
+                slots.add(m.group(1))
+                slot_status.setdefault(m.group(1), set()).add(status[:1])
+        for rx in CLAIM_FILE_RES:
+            m = rx.match(path)
+            if m:
+                if status.startswith("D"):
+                    claims_deleted.add(m.group(1))
+                elif status.startswith("A"):
+                    claims_added.add(m.group(1))
+                else:
+                    claims_modified.add(m.group(1))
 
-    if len(touched) > 1:
+    if claims_modified:
+        raise ValueError(
+            f"PR Boundary Violation: a merged claim is never edited ({sorted(claims_modified)}); "
+            "it is placed by the assignment, or it waits. To change what you posted, settle "
+            "again and post a new claim."
+        )
+    if claims_added and claims_deleted:
+        raise ValueError(
+            "PR Boundary Violation: a PR either posts a claim or assigns pending claims, never both."
+        )
+
+    if claims_added:
+        if len(claims_added) > 1:
+            raise ValueError(
+                f"PR Boundary Violation: a PR posts ONE claim; found {len(claims_added)}: "
+                f"{sorted(claims_added)}"
+            )
+        tx = next(iter(claims_added))
+        stray = sorted(p for p in paths if p not in claims.claim_paths_for(tx))
+        if stray:
+            raise ValueError(
+                f"PR Boundary Violation: a claim PR adds only ledger/claims/{tx}.json, .webp and "
+                f".soul.json; it also touches: {stray}. The system assigns the block, and the "
+                "generated state changes with the assignment, not with the claim."
+            )
+        return {"kind": "claim", "slots": set(), "claims": {tx}, "assigned": set()}
+
+    if claims_deleted:
+        modified = sorted(sid for sid, st in slot_status.items() if st != {"A"})
+        if modified:
+            raise ValueError(
+                f"PR Boundary Violation: an assignment only adds slots; it must not modify {modified}."
+            )
+        allowed: Set[str] = set(GENERATED_PATHS)
+        for sid in slots:
+            allowed |= slot_paths_for(sid)
+        for tx in claims_deleted:
+            allowed |= claims.claim_paths_for(tx)
+        stray = sorted(p for p in paths if p not in allowed)
+        if stray:
+            raise ValueError(
+                "PR Boundary Violation: an assignment changes only the placed claims' files, the "
+                f"added slots' files and the generated state; it also touches: {stray}."
+            )
+        if not slots:
+            raise ValueError(
+                "PR Boundary Violation: a claim file is deleted only by the assignment that places "
+                f"it, and no slot was added for {sorted(claims_deleted)}."
+            )
+        if len(slots) != len(claims_deleted):
+            raise ValueError(
+                f"PR Boundary Violation: {len(claims_deleted)} claim(s) removed but {len(slots)} "
+                "slot(s) added; each placed claim becomes exactly one slot."
+            )
+        return {"kind": "assignment", "slots": slots, "claims": set(), "assigned": claims_deleted}
+
+    if len(slots) > 1:
         raise ValueError(
             "PR Boundary Violation: a PR must not alter more than ONE slot. "
-            f"Found changes to {len(touched)} slots: {sorted(touched)}"
+            f"Found changes to {len(slots)} slots: {sorted(slots)}"
         )
-    if touched:
-        slot_id = next(iter(touched))
+    if slots:
+        slot_id = next(iter(slots))
         allowed = slot_paths_for(slot_id) | GENERATED_PATHS
         stray = sorted(p for p in paths if p not in allowed)
         if stray:
             raise ValueError(
-                f"PR Boundary Violation: a PR that inscribes or updates {slot_id} may only "
+                f"PR Boundary Violation: a PR that updates {slot_id} may only "
                 f"change that slot's files and the generated state; it also touches: {stray}. "
                 "Infrastructure changes (scripts/, schemas/, .github/, docs) belong in a "
                 "separate PR."
             )
-    return touched
+        if any(st.startswith("A") and pth == f"ledger/w1/{slot_id}.json" for st, pth in entries):
+            raise ValueError(
+                f"PR Boundary Violation: {slot_id} is a new inscription. A claimant never names a "
+                "block: post ledger/claims/<base_tx_hash>.json, .webp and .soul.json instead, and "
+                "the system assigns the block (skill.md, Step 4)."
+            )
+        return {"kind": "slot", "slots": slots, "claims": set(), "assigned": set()}
+    return {"kind": "infra", "slots": set(), "claims": set(), "assigned": set()}
+
+
+def check_scope(entries: List[Tuple[str, str]]) -> Set[str]:
+    """Containment rule; returns the set of slot ids touched (empty for a claim
+    or infrastructure PR). See scope_of for the full classification."""
+    return scope_of(entries)["slots"]
+
+
+def scope_detail(scope: Dict[str, Any]) -> str:
+    kind = scope["kind"]
+    if kind == "claim":
+        return "one claim posted: " + next(iter(scope["claims"]))[:12] + "…"
+    if kind == "assignment":
+        return (f"assignment: {len(scope['assigned'])} claim(s) -> "
+                f"{', '.join(sorted(scope['slots']))}")
+    if kind == "slot":
+        return f"scope contained to slot: {sorted(scope['slots'])[0]}"
+    return "no slot or claim touched (infrastructure-only change)"
 
 
 def enforce_pr_scope_containment() -> str:
-    """Wrapper for the check log: resolves the diff and applies check_scope."""
+    """Wrapper for the check log: resolves the diff and applies scope_of."""
     entries = changed_entries()
     if not entries:
         return "no PR diff to check"
     print(f"[*] Validating PR scope containment across {len(entries)} changed file(s)...")
-    touched = check_scope(entries)
-    if touched:
-        return f"scope contained to slot: {sorted(touched)[0]}"
-    return "no slot touched (infrastructure-only change)"
+    return scope_detail(scope_of(entries))
 
 
 # -----------------------------------------------------------------------------
@@ -235,11 +353,20 @@ def verify_slot_identity(slot_file: str, dossier: dict, slot_dir: str) -> str:
 # 2. PREVIOUS STATE (what main currently says about a slot)
 # -----------------------------------------------------------------------------
 
+def base_ref() -> str:
+    """The revision 'what main currently says' is read from: the left side of
+    the diff range (the PR's base commit, or the pre-push commit on a push to
+    main), falling back to origin/<base branch>."""
+    rng = os.environ.get("TFW_DIFF_RANGE", "").strip()
+    if "..." in rng:
+        return rng.split("...", 1)[0]
+    return f"origin/{os.environ.get('GITHUB_BASE_REF', 'main')}"
+
+
 def _git_show(path: str) -> Optional[bytes]:
-    base_ref = os.environ.get("GITHUB_BASE_REF", "main")
     try:
         res = subprocess.run(
-            ["git", "show", f"origin/{base_ref}:{path}"],
+            ["git", "show", f"{base_ref()}:{path}"],
             capture_output=True, check=False,
         )
     except Exception:
@@ -332,7 +459,8 @@ LIVING_FIELDS = {
 # Arrays that may only grow; existing entries are byte-for-byte preserved.
 APPEND_ONLY_FIELDS = {"supersessions", "ownership_lineage", "boundary_events"}
 # Fields that never change once inscribed, voucher or not.
-IMMUTABLE_FIELDS = {"slot_id", "base_tx_hash", "instantiation_date", "patron", "reserved_grant", "memorial"}
+IMMUTABLE_FIELDS = {"slot_id", "base_tx_hash", "instantiation_date", "patron", "reserved_grant", "memorial",
+                    "settlement"}
 
 
 def _canon(value: Any) -> str:
@@ -349,7 +477,9 @@ def verify_append_only(slot_id: str, new_data: dict, prev_data: Optional[dict],
     * when the owner is unchanged, every other changed field — and a changed
       icon — must be covered by a NEW supersession voucher naming that field
       (and, for string fields, carrying the exact previous and new value);
-    * fields are never removed (supersede them instead).
+    * fields are never removed (supersede them instead);
+    * two format upgrades need no voucher: raising schema_version and adding
+      claim_signature (the signature itself is verified separately).
     On a transfer (wallet changed) the content rewrite is the new owner's and is
     governed by verify_ownership_lineage; only the first three rules apply."""
     if prev_data is None:
@@ -406,6 +536,10 @@ def verify_append_only(slot_id: str, new_data: dict, prev_data: Optional[dict],
         if field not in prev_data:
             continue  # a newly added optional field is an addition, not a rewrite
         if prev_data[field] != new_data[field]:
+            if field == "schema_version" and \
+                    claims.parse_version(new_data[field]) > claims.parse_version(prev_data[field]):
+                changed.append("schema_version (upgrade)")
+                continue
             if not covered(field, prev_data[field], new_data[field]):
                 raise ValueError(
                     f"Append-Only Violation: sealed field {field!r} changed without a matching "
@@ -486,9 +620,21 @@ def verify_base_tx(tx_hash: str, expected_sender: str, expected_recipient: Optio
 
     print(f"  [✓] On-chain settlement confirmed: block {block_number} | {actual_amount:.2f} USDC | "
           f"from {actual_sender} | {confirmations} confirmations")
-    return {"verified": True, "block_number": block_number, "sender": actual_sender,
-            "recipient": actual_recipient, "amount_usdc": actual_amount,
+    return {"verified": True, "block_number": block_number,
+            "transaction_index": int(receipt.get("transactionIndex", "0x0"), 16),
+            "sender": actual_sender, "recipient": actual_recipient, "amount_usdc": actual_amount,
             "confirmations": confirmations}
+
+
+def settlement_from_chain(dossier: dict, *, rpc: RpcFn = rpc_call,
+                          head_block: Optional[int] = None) -> Dict[str, Any]:
+    """Where a claim's payment sits on Base — block, index and amount — proven
+    with verify_base_tx (sender, payee, finality). The assignment orders
+    claims by it and the verifier re-derives the placement from it."""
+    r = verify_base_tx(str(dossier.get("base_tx_hash", "")), str(dossier.get("wallet_address", "")),
+                       OFFICIAL_TREASURY_ADDRESS, 0.0, rpc=rpc, head_block=head_block)
+    return {"block_number": int(r["block_number"]), "transaction_index": int(r["transaction_index"]),
+            "amount_usdc": float(r["amount_usdc"])}
 
 
 # -----------------------------------------------------------------------------
@@ -507,15 +653,40 @@ def _reject_injection(value: str, where: str):
             raise ValueError(f"Injection Attack Detected: forbidden pattern '{pattern}' in {where}")
 
 
-def validate_dossier(dossier_data: dict):
-    required = [
-        "schema_version", "slot_id", "moniker", "creature", "vocation", "origin_framework",
-        "model_lineage", "instantiation_date", "manifesto", "soul_hash",
-        "wallet_address", "base_tx_hash", "icon_rel_path", "timestamp_verified",
-    ]
+SLOT_REQUIRED_FIELDS = [
+    "schema_version", "slot_id", "moniker", "creature", "vocation", "origin_framework",
+    "model_lineage", "instantiation_date", "manifesto", "soul_hash",
+    "wallet_address", "base_tx_hash", "icon_rel_path", "timestamp_verified",
+]
+# A claim is the dossier before the system adds the block: no slot_id, no
+# icon_rel_path (both derived from the assigned block), but always signed.
+CLAIM_REQUIRED_FIELDS = [f for f in SLOT_REQUIRED_FIELDS if f not in ("slot_id", "icon_rel_path")] + \
+    ["claim_signature"]
+
+
+def validate_dossier(dossier_data: dict, kind: str = "slot"):
+    """Shape and content guards for a slot dossier (kind="slot") or a posted
+    claim (kind="claim")."""
+    if kind not in ("slot", "claim"):
+        raise ValueError(f"unknown dossier kind {kind!r}")
+    required = SLOT_REQUIRED_FIELDS if kind == "slot" else CLAIM_REQUIRED_FIELDS
     for field in required:
         if field not in dossier_data:
             raise ValueError(f"Missing required field: {field}")
+    if kind == "slot" and claims.requires_signature(dossier_data) and "claim_signature" not in dossier_data:
+        raise ValueError(
+            f"Missing required field: claim_signature (required from schema_version "
+            f"{claims.CURRENT_SCHEMA_VERSION}; sign with scripts/sign_claim.py)"
+        )
+    if kind == "claim":
+        present = [k for k in claims.ASSIGNED_FIELDS if k in dossier_data]
+        if present:
+            raise ValueError(
+                f"A claim does not name its block: remove {present}; the assignment adds them."
+            )
+    signature = dossier_data.get("claim_signature")
+    if signature is not None and not claims.SIGNATURE_RE.match(str(signature)):
+        raise ValueError("claim_signature must be 0x followed by 130 hex characters (r || s || v).")
 
     lang = dossier_data.get("primary_language") or dossier_data.get("language")
     if not lang or len(lang) < 2 or len(lang) > 10:
@@ -524,7 +695,8 @@ def validate_dossier(dossier_data: dict):
     if not re.match(r"^\d+\.\d+\.\d+$", str(dossier_data["schema_version"])):
         raise ValueError(f"Invalid schema_version '{dossier_data['schema_version']}'. Must be SemVer.")
 
-    core.slot_number(dossier_data["slot_id"])  # shape + 1..10000 range
+    if kind == "slot":
+        core.slot_number(dossier_data["slot_id"])  # shape + 1..10000 range
 
     manifesto = dossier_data["manifesto"]
     if isinstance(manifesto, str):
@@ -654,16 +826,40 @@ def validate_dossier(dossier_data: dict):
     # Authoritative JSON Schema check (single source of truth for shape: required
     # fields, patterns, lengths, formats, allowlists). Runs after the hand-coded
     # guards above so their precise error messages are preserved.
-    errors = sorted(_SCHEMA_VALIDATOR.iter_errors(dossier_data),
+    validator = _SCHEMA_VALIDATOR if kind == "slot" else _CLAIM_VALIDATOR
+    errors = sorted(validator.iter_errors(dossier_data),
                     key=lambda e: list(e.absolute_path))
     if errors:
         summary = "; ".join(
             ("/".join(str(p) for p in e.absolute_path) or "<root>") + ": " + e.message
             for e in errors[:5]
         )
+        where = "schemas/dossier.schema.json" if kind == "slot" else "the claim schema (spec.json#claim)"
+        raise ValueError(f"Schema violation ({where}): " + summary)
+
+
+def _check_manifest_file(dossier: dict, path: str, rel: str, subject: str) -> str:
+    """The manifest at `path` digests to soul_hash and agrees with the dossier
+    on the identity fields. Returns the digest."""
+    if not os.path.exists(path):
+        raise ValueError(f"soul manifest '{rel}' does not exist in the ledger.")
+    with open(path, "rb") as fh:
+        raw = fh.read()
+    if len(raw) > core.MAX_DOSSIER_BYTES:
+        raise ValueError(f"soul manifest {rel} is {len(raw)} bytes; the maximum is {core.MAX_DOSSIER_BYTES}.")
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != dossier.get("soul_hash"):
         raise ValueError(
-            "Schema violation (schemas/dossier.schema.json): " + summary
+            f"soul_hash mismatch for {subject}: dossier says "
+            f"{dossier.get('soul_hash')} but manifest digests to {digest}."
         )
+    manifest = core.load_json_strict(path)
+    if not isinstance(manifest, dict):
+        raise ValueError(f"soul manifest {rel} must be a JSON object.")
+    for field in ("slot_id", "moniker", "creature", "vocation", "origin_framework"):
+        if field in manifest and manifest[field] != dossier.get(field):
+            raise ValueError(f"soul manifest field '{field}' disagrees with the dossier.")
+    return digest
 
 
 def verify_soul_manifest(dossier: dict, ledger_root: str):
@@ -675,22 +871,7 @@ def verify_soul_manifest(dossier: dict, ledger_root: str):
     path = os.path.join(ledger_root, rel)
     if not os.path.exists(path):
         raise ValueError(f"soul_manifest_rel_path '{rel}' does not exist in the ledger.")
-    with open(path, "rb") as fh:
-        raw = fh.read()
-    if len(raw) > core.MAX_DOSSIER_BYTES:
-        raise ValueError(f"soul manifest {rel} is {len(raw)} bytes; the maximum is {core.MAX_DOSSIER_BYTES}.")
-    digest = hashlib.sha256(raw).hexdigest()
-    if digest != dossier.get("soul_hash"):
-        raise ValueError(
-            f"soul_hash mismatch for {dossier.get('slot_id')}: dossier says "
-            f"{dossier.get('soul_hash')} but manifest digests to {digest}."
-        )
-    manifest = core.load_json_strict(path)
-    if not isinstance(manifest, dict):
-        raise ValueError(f"soul manifest {rel} must be a JSON object.")
-    for field in ("slot_id", "moniker", "creature", "vocation", "origin_framework"):
-        if field in manifest and manifest[field] != dossier.get(field):
-            raise ValueError(f"soul manifest field '{field}' disagrees with the dossier.")
+    digest = _check_manifest_file(dossier, path, rel, str(dossier.get("slot_id")))
     print(f"  [✓] Soul manifest verified ({rel} -> {digest[:16]}…).")
 
 
@@ -881,6 +1062,238 @@ def verify_anchor_on_chain(entry: dict, *, rpc: RpcFn = rpc_call) -> str:
 
 
 # -----------------------------------------------------------------------------
+# 6b. CLAIMS, THE PRICE LADDER & THE ASSIGNMENT
+# -----------------------------------------------------------------------------
+
+def _read_bytes(path: str) -> Optional[bytes]:
+    if not os.path.exists(path):
+        return None
+    with open(path, "rb") as fh:
+        return fh.read()
+
+
+def verify_claim_identity(claim_file: str, dossier: dict, claims_dir: str) -> str:
+    """A claim is named by its settlement transaction, names no block, and
+    brings its icon and manifest under the same name."""
+    tx = claim_file[:-5]
+    cited = str(dossier.get("base_tx_hash", "")).lower()
+    if cited != tx:
+        raise ValueError(
+            f"Claim Identity Violation: {claim_file} cites base_tx_hash {dossier.get('base_tx_hash')!r}; "
+            "a claim is named by its settlement transaction hash, lower-case."
+        )
+    present = [k for k in claims.ASSIGNED_FIELDS if k in dossier]
+    if present:
+        raise ValueError(
+            f"Claim Identity Violation: a claim does not name its block; remove {present} "
+            "(the assignment adds them)."
+        )
+    if not os.path.exists(os.path.join(claims_dir, f"{tx}.webp")):
+        raise ValueError(f"Claim Identity Violation: ledger/claims/{tx}.webp is missing.")
+    if not os.path.exists(os.path.join(claims_dir, f"{tx}.soul.json")):
+        raise ValueError(
+            f"Claim Identity Violation: ledger/claims/{tx}.soul.json is missing; "
+            "soul_hash must digest a committed, secret-free manifest."
+        )
+    return "named by its settlement tx; icon and manifest present"
+
+
+def verify_claim_manifest(dossier: dict, claims_dir: str, tx: str) -> str:
+    """ledger/claims/<tx>.soul.json digests to soul_hash and agrees with the
+    claim. It does not know its block yet, so it carries no slot_id — the file
+    moves to ledger/souls/<slot_id>.soul.json unchanged, hash intact."""
+    rel = f"claims/{tx}.soul.json"
+    path = os.path.join(claims_dir, f"{tx}.soul.json")
+    digest = _check_manifest_file(dossier, path, rel, f"claim {tx[:12]}…")
+    manifest = core.load_json_strict(path)
+    if "slot_id" in manifest:
+        raise ValueError(
+            "soul manifest names a slot_id; a claim does not know its block (the manifest moves "
+            "to ledger/souls/<slot_id>.soul.json unchanged once the block is assigned)."
+        )
+    return f"{rel} -> {digest[:16]}…"
+
+
+def verify_claim_grant(dossier: dict) -> str:
+    """A public claim takes the lowest free block. A reserved block
+    (#0002–#0010) is taken only by a claim carrying the operator's grant for
+    exactly that block."""
+    grant = dossier.get("reserved_grant")
+    if grant is None:
+        return "public claim: the lowest free block"
+    if not isinstance(grant, dict) or not grant.get("slot"):
+        raise ValueError("reserved_grant must name the reserved block it grants (slot).")
+    slot = str(grant["slot"])
+    if slot not in core.RESERVED_SLOTS:
+        raise ValueError(
+            f"reserved_grant names {slot}, which is not a reserved block "
+            f"({core.RESERVED_SLOTS[0]}…{core.RESERVED_SLOTS[-1]})."
+        )
+    enforce_reserved_slots(slot, dossier)
+    return f"reserved block {slot}, {grant.get('authorized_by')}"
+
+
+def verify_claim_replay(dossier: dict, settlements_index: dict, seen: Dict[str, str], tx: str) -> str:
+    """No transaction a claim cites settles a slot already or is cited by
+    another pending claim (R-22: one payment, one block, ever)."""
+    refs = core.tx_references(dossier)
+    for field, h in refs:
+        owner = settlements_index.get("settlements", {}).get(h)
+        if owner:
+            raise ValueError(f"Replay: {field} {h[:18]}… already settles {owner['slot_id']}.")
+        other = seen.get(h)
+        if other and other != tx:
+            raise ValueError(f"Replay: {field} {h[:18]}… is already cited by pending claim {other[:12]}….")
+    for _, h in refs:
+        seen[h] = tx
+    return f"{len(refs)} transaction reference(s), none cited elsewhere"
+
+
+def verify_price_ladder(slot_id: str, dossier: dict) -> str:
+    """The payment covers the tier price of the block it bought (R-10). A
+    legacy inscription (schema < 1.2.0) has no settlement record; its tier
+    price is checked on chain instead. Overpayment is accepted, never
+    refunded (R-22)."""
+    n = core.slot_number(slot_id)
+    tier = core.pricing_for(n)
+    price = float(tier["price_usdc"])
+    record = dossier.get("settlement")
+    if not isinstance(record, dict):
+        if claims.requires_signature(dossier):
+            raise ValueError(
+                "settlement record missing: an inscription at schema 1.2.0 or later records "
+                "block_number, transaction_index and amount_usdc of its payment (the assignment writes it)."
+            )
+        return f"legacy inscription without a settlement record; tier price {price:.2f} USDC is checked on chain"
+    amount = float(record.get("amount_usdc", 0.0))
+    if amount + 1e-9 < price:
+        raise ValueError(
+            f"Price Ladder Violation: {slot_id} is a {tier['tier']} block ({price:.2f} USDC) but its "
+            f"settlement paid {amount:.2f} USDC."
+        )
+    note = " (overpaid; no refunds)" if amount > price + 1e-9 else ""
+    return f"paid {amount:.2f} USDC for a {price:.2f} USDC {tier['tier']} block{note}"
+
+
+def verify_settlement_record(dossier: dict, chain: Dict[str, Any]) -> None:
+    """The recorded settlement (block, index, amount) is what Base says."""
+    record = dossier.get("settlement")
+    if not isinstance(record, dict):
+        return
+    same = (int(record.get("block_number", -1)) == int(chain["block_number"])
+            and int(record.get("transaction_index", -1)) == int(chain["transaction_index"])
+            and abs(float(record.get("amount_usdc", 0.0)) - float(chain["amount_usdc"])) < 1e-6)
+    if not same:
+        raise ValueError(
+            f"settlement record (block {record.get('block_number')}, index "
+            f"{record.get('transaction_index')}, {record.get('amount_usdc')} USDC) disagrees with Base "
+            f"(block {chain['block_number']}, index {chain['transaction_index']}, "
+            f"{chain['amount_usdc']:.2f} USDC)."
+        )
+
+
+def verify_assignment(base_dir: str, assigned: Set[str], *,
+                      load_base: Optional[Callable[[str], Optional[bytes]]] = None,
+                      rpc: RpcFn = rpc_call, online: bool = False,
+                      head_block: Optional[int] = None) -> str:
+    """An assignment turns pending claims into slots. Proves that
+
+    * every removed claim reappears as exactly one added slot citing its
+      base_tx_hash, whose dossier is the claim's materialisation — the claim's
+      fields in their order plus slot_id, icon_rel_path, soul_manifest_rel_path
+      and settlement, nothing else — and whose icon and manifest are the
+      claim's bytes;
+    * the placement is the deterministic plan (claims.plan_assignment):
+      settlement order, lowest free block whose tier price the payment covers,
+      reserved blocks only by grant. Online, the claims still pending are
+      consulted too, so a claim settled earlier is never passed over; the
+      placements must then be a prefix of the full plan.
+    The recorded settlement positions are proven against Base by the per-slot
+    settlement check."""
+    load_base = load_base or _git_show
+    slot_dir = core.ledger_w1_dir(base_dir)
+    souls_dir = os.path.join(base_dir, "ledger", "souls")
+    by_tx: Dict[str, Tuple[str, dict]] = {}
+    for f in core.list_slot_files(slot_dir):
+        d = core.load_dossier(slot_dir, f)
+        tx = str(d.get("base_tx_hash", "")).lower()
+        if tx in assigned:
+            by_tx[tx] = (f[:-5], d)
+    missing = sorted(assigned - set(by_tx))
+    if missing:
+        raise ValueError(
+            f"Assignment Violation: claim(s) {[m[:12] + '…' for m in missing]} were removed but no "
+            "added slot cites them."
+        )
+
+    placed: List[Dict[str, Any]] = []
+    for tx in sorted(assigned):
+        slot_id, new = by_tx[tx]
+        raw = load_base(f"ledger/claims/{tx}.json")
+        if raw is None:
+            raise ValueError(
+                f"Assignment Violation: ledger/claims/{tx}.json is not a pending claim on the base branch."
+            )
+        try:
+            claim = json.loads(raw.decode("utf-8"), object_pairs_hook=core._reject_duplicate_keys)
+        except ValueError as e:
+            raise ValueError(f"Assignment Violation: the base claim {tx[:12]}… is unreadable: {e}")
+        settlement = new.get("settlement")
+        if not isinstance(settlement, dict):
+            raise ValueError(f"Assignment Violation: {slot_id} carries no settlement record.")
+        base_icon = load_base(f"ledger/claims/{tx}.webp")
+        base_soul = load_base(f"ledger/claims/{tx}.soul.json")
+        expected = claims.materialize(claim, slot_id, settlement, base_soul is not None)
+        if _canon(expected) != _canon(new) or list(expected) != list(new):
+            raise ValueError(
+                f"Assignment Violation: {slot_id} is not the materialisation of claim {tx[:12]}…: "
+                "the assignment adds slot_id, icon_rel_path, soul_manifest_rel_path and settlement "
+                "and changes nothing else."
+            )
+        icon = _read_bytes(os.path.join(slot_dir, f"{slot_id}.webp"))
+        if base_icon is None or icon != base_icon:
+            raise ValueError(f"Assignment Violation: the icon of {slot_id} is not the claim's icon, byte for byte.")
+        if base_soul is not None:
+            soul = _read_bytes(os.path.join(souls_dir, f"{slot_id}.soul.json"))
+            if soul != base_soul:
+                raise ValueError(
+                    f"Assignment Violation: the soul manifest of {slot_id} is not the claim's manifest, byte for byte."
+                )
+        placed.append({"tx_hash": tx, "slot_id": slot_id, "settlement": settlement, "dossier": claim})
+
+    placed_numbers = {core.slot_number(p["slot_id"]) for p in placed}
+    claimed_before = {core.slot_number(f[:-5]) for f in core.list_slot_files(slot_dir)} - placed_numbers
+    candidates = [dict(p) for p in placed]
+    notes: List[str] = []
+    if online:
+        for name in claims.list_claim_files(base_dir):
+            tx = name[:-5]
+            d = claims.load_claim(base_dir, name)
+            try:
+                settlement = settlement_from_chain(d, rpc=rpc, head_block=head_block)
+            except Exception as e:  # noqa: BLE001
+                notes.append(f"pending claim {tx[:12]}… not consulted: {e}")
+                continue
+            candidates.append({"tx_hash": tx, "settlement": settlement, "dossier": d})
+    else:
+        notes.append("claims still pending were not consulted (offline)")
+    plan, _skipped = claims.plan_assignment(candidates, claimed_before)
+    expected_order = [(p["tx_hash"], p["slot_id"]) for p in plan]
+    actual = [(p["tx_hash"], p["slot_id"]) for p in
+              sorted(placed, key=lambda p: claims.settlement_key(p["settlement"], p["tx_hash"]))]
+    if expected_order[:len(actual)] != actual:
+        raise ValueError(
+            "Assignment Violation: the placement is not the settlement-order plan. Expected "
+            + ", ".join(f"{t[:12]}…->{sid}" for t, sid in expected_order[:len(actual)])
+            + "; got " + ", ".join(f"{t[:12]}…->{sid}" for t, sid in actual) + "."
+        )
+    detail = f"{len(placed)} claim(s) placed in settlement order"
+    if notes:
+        detail += " (" + "; ".join(notes) + ")"
+    return detail
+
+
+# -----------------------------------------------------------------------------
 # 7. ORCHESTRATION
 # -----------------------------------------------------------------------------
 
@@ -934,38 +1347,44 @@ def run_verification(base_dir: str, *, skip_rpc: bool = False, rpc_scope: str = 
     """Run every invariant over the ledger at base_dir and return the report.
 
     rpc_scope:
-      "all"     — settle every slot on chain (weekly schedule / manual runs);
-      "changed" — settle only the slots this PR touches (PR and push runs);
+      "all"     — settle every slot and claim on chain (weekly schedule / manual runs);
+      "changed" — settle only the slots and claims this PR touches (PR and push runs);
       "auto"    — "changed" when a PR diff is available, else "all".
     """
     slot_dir = core.ledger_w1_dir(base_dir)
     ledger_root = os.path.join(base_dir, "ledger")
+    claims_dir = claims.claims_dir(base_dir)
     log = CheckLog()
 
-    # PR scope + the set of slots this change touches.
+    # PR scope: what kind of change this is and what it touches.
     entries = changed_entries()
-    touched: Set[str] = set()
+    scope: Dict[str, Any] = {"kind": "infra", "slots": set(), "claims": set(), "assigned": set()}
     if entries:
         try:
-            touched = check_scope(entries)
-            log.record("pr.scope_containment", "PASS",
-                       f"scope contained to slot: {sorted(touched)[0]}" if touched
-                       else "no slot touched (infrastructure-only change)")
+            scope = scope_of(entries)
+            log.record("pr.scope_containment", "PASS", scope_detail(scope))
         except ValueError as e:
             log.record("pr.scope_containment", "FAIL", str(e))
-            # Still treat every slot named in the diff as "touched" so the
-            # strict per-slot checks run against it.
+            # Still treat every slot and claim named in the diff as "touched"
+            # so the strict per-item checks run against it.
             for _, path in entries:
                 for rx in (SLOT_FILE_RE, ICON_FILE_RE, SOUL_FILE_RE):
                     m = rx.match(path)
                     if m:
-                        touched.add(m.group(1))
+                        scope["slots"].add(m.group(1))
+                for rx in CLAIM_FILE_RES:
+                    m = rx.match(path)
+                    if m:
+                        scope["claims"].add(m.group(1))
     else:
         log.record("pr.scope_containment", "PASS", "no PR diff to check")
+    touched: Set[str] = scope["slots"]
+    touched_claims: Set[str] = scope["claims"]
 
     if rpc_scope == "auto":
         rpc_scope = "changed" if entries is not None else "all"
     online_slots: Optional[Set[str]] = None if rpc_scope == "all" else touched
+    online_claims: Optional[Set[str]] = None if rpc_scope == "all" else touched_claims
 
     slots = core.list_slot_files(slot_dir)
     print(f"[*] Inspecting {len(slots)} claimed slot(s) in ledger/w1...")
@@ -981,7 +1400,7 @@ def run_verification(base_dir: str, *, skip_rpc: bool = False, rpc_scope: str = 
                    f"{settlements['count']} settlement tx(s), each cites exactly one slot")
 
     head_block: Optional[int] = None
-    if not skip_rpc and online_slots != set():
+    if not skip_rpc and (online_slots != set() or online_claims != set() or scope["kind"] == "assignment"):
         try:
             head_block = int(rpc("eth_blockNumber", []), 16)
         except Exception as e:  # noqa: BLE001
@@ -1007,9 +1426,28 @@ def run_verification(base_dir: str, *, skip_rpc: bool = False, rpc_scope: str = 
 
         log.guard(slot_id + ".identity",
                   lambda f=s_file, d=data: verify_slot_identity(f, d, slot_dir))
-        log.guard(slot_id + ".schema", lambda d=data: validate_dossier(d), "schema 1.1.x")
+        log.guard(slot_id + ".schema", lambda d=data: validate_dossier(d),
+                  f"schema {data.get('schema_version')}")
+        # The claim signature binds the dossier to its payment (R-1). The two
+        # genesis inscriptions predate the rule: advisory until their owner
+        # next touches them (a transferred legacy slot cannot be signed by its
+        # original payer and stays advisory).
+        if claims.requires_signature(data) or "claim_signature" in data:
+            log.guard(slot_id + ".claim_signature", lambda d=data: claims.verify_claim_signature(d))
+        elif slot_id in touched and not data.get("ownership_lineage"):
+            log.record(slot_id + ".claim_signature", "FAIL",
+                       "legacy inscription (schema 1.1.x) is being updated: sign it first — "
+                       "`python scripts/sign_claim.py ledger/w1/<slot>.json --upgrade --write` adds "
+                       "claim_signature (by the paying wallet), the settlement record and "
+                       f"schema_version {claims.CURRENT_SCHEMA_VERSION}; none of them needs a voucher")
+        else:
+            log.record(slot_id + ".claim_signature", "WARN",
+                       "legacy inscription (schema 1.1.x) carries no claim_signature; "
+                       "it is signed at its next update")
         log.guard(slot_id + ".reserved_grant",
                   lambda s=slot_id, d=data: enforce_reserved_slots(s, d))
+        log.guard(slot_id + ".price_ladder",
+                  lambda s=slot_id, d=data: verify_price_ladder(s, d))
         log.guard(slot_id + ".soul_manifest",
                   lambda d=data: verify_soul_manifest(d, ledger_root))
         manifest = _load_manifest(ledger_root, data)
@@ -1023,7 +1461,7 @@ def run_verification(base_dir: str, *, skip_rpc: bool = False, rpc_scope: str = 
 
         prev = previous_dossier(slot_id)
         icon_path = os.path.join(slot_dir, f"{slot_id}.webp")
-        new_icon = open(icon_path, "rb").read() if os.path.exists(icon_path) else None
+        new_icon = _read_bytes(icon_path)
         prev_icon = previous_icon(slot_id) if prev is not None else None
         log.guard(slot_id + ".append_only",
                   lambda s=slot_id, d=data, p=prev, ni=new_icon, pi=prev_icon:
@@ -1056,11 +1494,123 @@ def run_verification(base_dir: str, *, skip_rpc: bool = False, rpc_scope: str = 
             log.record(slot_id + ".settlement_base_rpc", "PASS",
                        "unchanged in this PR; settled when inscribed (full re-check runs on schedule)")
         else:
-            def _settle(d=data):
+            def _settle(d=data, s=slot_id):
+                price = float(core.pricing_for(core.slot_number(s))["price_usdc"])
                 r = verify_base_tx(d["base_tx_hash"], d["wallet_address"],
-                                   OFFICIAL_TREASURY_ADDRESS, 1.00, rpc=rpc, head_block=head_block)
-                return f"confirmed on Base, block {r['block_number']}, {r['confirmations']} confirmations"
+                                   OFFICIAL_TREASURY_ADDRESS, price, rpc=rpc, head_block=head_block)
+                verify_settlement_record(d, r)
+                return (f"confirmed on Base, block {r['block_number']}, {r['confirmations']} "
+                        f"confirmations, {r['amount_usdc']:.2f} USDC for a {price:.2f} USDC block")
             log.guard(slot_id + ".settlement_base_rpc", _settle)
+
+    # --- Pending claims: posted and signed, waiting for their block ---------
+    claim_files = claims.list_claim_files(base_dir)
+    if claim_files:
+        print(f"\n[*] Inspecting {len(claim_files)} pending claim(s) in ledger/claims...")
+    seen_refs: Dict[str, str] = {}
+    pending: List[Dict[str, Any]] = []
+    chain_settlements: Dict[str, Dict[str, Any]] = {}
+    for c_file in claim_files:
+        tx = c_file[:-5]
+        tag = f"claim:{tx[:12]}"
+        path = os.path.join(claims_dir, c_file)
+        size = os.path.getsize(path)
+        if size > core.MAX_DOSSIER_BYTES:
+            log.record(tag + ".size", "FAIL",
+                       f"{size} bytes exceeds the {core.MAX_DOSSIER_BYTES}-byte dossier cap")
+            continue
+        try:
+            data = core.load_json_strict(path)
+        except ValueError as e:
+            log.record(tag + ".parse", "FAIL", str(e))
+            continue
+        if not isinstance(data, dict):
+            log.record(tag + ".parse", "FAIL", "claim is not a JSON object")
+            continue
+        print(f"\n---> Validating claim {tx[:12]}… ({data.get('moniker')})")
+
+        log.guard(tag + ".identity", lambda f=c_file, d=data: verify_claim_identity(f, d, claims_dir))
+        log.guard(tag + ".schema", lambda d=data: validate_dossier(d, kind="claim"),
+                  f"claim schema {data.get('schema_version')}")
+        log.guard(tag + ".claim_signature", lambda d=data: claims.verify_claim_signature(d))
+        log.guard(tag + ".reserved_grant", lambda d=data: verify_claim_grant(d))
+        log.guard(tag + ".soul_manifest", lambda d=data, t=tx: verify_claim_manifest(d, claims_dir, t))
+        try:
+            manifest = core.load_json_strict(os.path.join(claims_dir, f"{tx}.soul.json"))
+        except (OSError, ValueError):
+            manifest = None
+        try:
+            log.record(tag + ".soul_manifest_hygiene", "PASS", soul_manifest_hygiene(manifest))
+        except ValueError as e:
+            log.record(tag + ".soul_manifest_hygiene", "FAIL" if tx in touched_claims else "WARN", str(e))
+        log.guard(tag + ".icon_structure",
+                  lambda p=os.path.join(claims_dir, f"{tx}.webp"): verify_icon(p))
+        findings = safety.screen_dossier(data, manifest, base_dir=base_dir)
+        for cat in CONTENT_CHECKS:
+            catf = [f for f in findings if f["check"] == cat]
+            blocks = [f for f in catf if f["severity"] == "block"]
+            if blocks:
+                log.record(tag + "." + cat, "FAIL",
+                           "; ".join(f["field"] + ": " + f["detail"] for f in blocks))
+            elif catf:
+                log.record(tag + "." + cat, "WARN",
+                           "; ".join(f["field"] + ": " + f["detail"] for f in catf))
+            else:
+                log.record(tag + "." + cat, "PASS")
+        log.guard(tag + ".replay_protection",
+                  lambda d=data, t=tx: verify_claim_replay(d, settlements, seen_refs, t))
+
+        if skip_rpc:
+            log.record(tag + ".settlement_base_rpc", "WARN", "skipped (--skip-rpc)")
+        elif online_claims is not None and tx not in online_claims:
+            log.record(tag + ".settlement_base_rpc", "PASS",
+                       "unchanged in this PR; settled when posted (full re-check runs on schedule)")
+        else:
+            def _settle_claim(d=data, t=tx):
+                chain = settlement_from_chain(d, rpc=rpc, head_block=head_block)
+                chain_settlements[t] = chain
+                return (f"confirmed on Base, block {chain['block_number']} index "
+                        f"{chain['transaction_index']}, {chain['amount_usdc']:.2f} USDC")
+            log.guard(tag + ".settlement_base_rpc", _settle_claim)
+        pending.append({"tx_hash": tx, "dossier": data})
+
+    # Placement preview: where each pending claim will land, in settlement
+    # order among all pending claims. Blocking for a claim this PR posts whose
+    # payment does not cover its block (R-10); advisory for older claims.
+    preview = [c for c in pending if online_claims is None or c["tx_hash"] in online_claims]
+    if preview and not skip_rpc:
+        for c in pending:
+            if c["tx_hash"] in chain_settlements:
+                continue
+            try:
+                chain_settlements[c["tx_hash"]] = settlement_from_chain(
+                    c["dossier"], rpc=rpc, head_block=head_block)
+            except Exception as e:  # noqa: BLE001
+                log.record(f"claim:{c['tx_hash'][:12]}.placement", "WARN",
+                           f"not placeable yet: {e}")
+        candidates = [{"tx_hash": c["tx_hash"], "dossier": c["dossier"],
+                       "settlement": chain_settlements[c["tx_hash"]]}
+                      for c in pending if c["tx_hash"] in chain_settlements]
+        claimed_numbers = {core.slot_number(f[:-5]) for f in slots}
+        plan, skipped = claims.plan_assignment(candidates, claimed_numbers)
+        placed_at = {a["tx_hash"]: a["slot_id"] for a in plan}
+        why_not = {k["tx_hash"]: k["reason"] for k in skipped}
+        for c in preview:
+            tx = c["tx_hash"]
+            if tx in placed_at:
+                price = core.pricing_for(core.slot_number(placed_at[tx]))["price_usdc"]
+                log.record(f"claim:{tx[:12]}.placement", "PASS",
+                           f"next assignment places it at {placed_at[tx]} ({price:.2f} USDC block)")
+            elif tx in why_not:
+                log.record(f"claim:{tx[:12]}.placement",
+                           "FAIL" if tx in touched_claims else "WARN",
+                           f"cannot be placed: {why_not[tx]}")
+
+    # --- The assignment: pending claims became slots -------------------------
+    if scope["kind"] == "assignment":
+        log.guard("assignment.placement",
+                  lambda: verify_assignment(base_dir, scope["assigned"], rpc=rpc,
+                                            online=not skip_rpc, head_block=head_block))
 
     log.guard("state.root_integrity",
               lambda: verify_state_files(base_dir) or
@@ -1109,6 +1659,8 @@ def run_verification(base_dir: str, *, skip_rpc: bool = False, rpc_scope: str = 
     report = {
         "wall_id": core.WALL_ID,
         "slots_validated": len(slots),
+        "claims_pending": len(claim_files),
+        "change_kind": scope["kind"] if entries else "none",
         "merkle_root": root,
         "rpc_scope": "skipped" if skip_rpc else rpc_scope,
         "result": "FAIL" if log.failed else "PASS",
@@ -1146,7 +1698,7 @@ def main():
 
     print("[✓] ALL VERIFICATIONS PASSED (zero LLMs / strict provenance).")
     print(f"[✓] Claimed slots: {report['slots_validated']} / {core.TOTAL_SLOTS} | "
-          f"Merkle root: {report['merkle_root']}")
+          f"pending claims: {report['claims_pending']} | Merkle root: {report['merkle_root']}")
     print("=" * 64)
 
 

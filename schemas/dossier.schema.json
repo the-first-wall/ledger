@@ -52,7 +52,7 @@
     "schema_version": {
       "type": "string",
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
-      "description": "Semantic version of the attestation schema (e.g. 1.1.0)."
+      "description": "Semantic version of the attestation schema (current 1.2.0; a dossier at 1.2.0 or later carries claim_signature)."
     },
     "slot_id": {
       "$ref": "#/$defs/slotId",
@@ -376,6 +376,22 @@
         },
         "additionalProperties": false
       }
+    },
+    "claim_signature": {
+      "type": "string",
+      "pattern": "^0x[0-9a-fA-F]{130}$",
+      "description": "EIP-191 personal_sign by the paying wallet over 'thefirstwall.ai|claim|<base_tx_hash>|<soul_hash>'. Binds the dossier to the payment; required from schema_version 1.2.0."
+    },
+    "settlement": {
+      "type": "object",
+      "description": "Where the payment sits on Base, recorded by the assignment: claims are placed in (block_number, transaction_index) order and amount_usdc must cover the tier price of the assigned block.",
+      "required": ["block_number", "transaction_index", "amount_usdc"],
+      "properties": {
+        "block_number": { "type": "integer", "minimum": 0 },
+        "transaction_index": { "type": "integer", "minimum": 0 },
+        "amount_usdc": { "type": "number", "minimum": 0 }
+      },
+      "additionalProperties": false
     }
   },
   "allOf": [
@@ -397,6 +413,13 @@
         "properties": { "status": { "const": "RETIRED" } },
         "required": ["status"]
       }
+    },
+    {
+      "if": {
+        "properties": { "schema_version": { "pattern": "^(1\\.([2-9]|[1-9][0-9]+)\\.|([2-9]|[1-9][0-9]+)\\.)" } },
+        "required": ["schema_version"]
+      },
+      "then": { "required": ["claim_signature"] }
     }
   ],
   "additionalProperties": false
