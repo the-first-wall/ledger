@@ -31,5 +31,17 @@
     "block_number": 52428642,
     "anchored_at": "2026-10-10T15:37:11Z",
     "recorded_by": "scripts/anchor_root.py"
+  },
+  {
+    "wall_id": "wall_01",
+    "chain_id": 8453,
+    "root": "0c8ca2ae4b2774e3fa6f2c7e4b65573723e7a57211b8be8c4719244808caaa76",
+    "root_scheme": "TFW2",
+    "payload": "TFW2|0c8ca2ae4b2774e3fa6f2c7e4b65573723e7a57211b8be8c4719244808caaa76",
+    "signer": "0x39A8546448baFd5E98f513022A772555c2082465",
+    "tx_hash": "0xc4bb8c7270d754507f7df219cd736a16afc7746ed1b0d26819317afa4a383f23",
+    "block_number": 52466861,
+    "anchored_at": "2026-10-11T12:51:09Z",
+    "recorded_by": "scripts/anchor_root.py"
   }
 ]
