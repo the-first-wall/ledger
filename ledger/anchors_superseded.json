@@ -1,0 +1,51 @@
+{
+  "note": "Anchors retired on 2026-10-11 by a clean break. The first three committed roots of the earlier flat-hash construction (a SHA-256 over the concatenated dossier and icon bytes); the fourth committed the Reckoning root under its interim tag TFW2. The verifier does not read this file. Each transaction remains on Base and can be checked by hand against the payload it carries; the anchored state is in git history at the commit that recorded it.",
+  "retired_on": "2026-10-11",
+  "records": [
+    {
+      "wall_id": "wall_01",
+      "chain_id": 8453,
+      "root": "5eda092a5015996f4654501ddbadba580149ab0b7889a772624326f3b70ce6e2",
+      "payload": "TFW1|5eda092a5015996f4654501ddbadba580149ab0b7889a772624326f3b70ce6e2",
+      "signer": "0x39A8546448baFd5E98f513022A772555c2082465",
+      "tx_hash": "0xc05eee32940072e224b14dfeef53acb9076bef04e11f39e99bdce7ee3d0a7594",
+      "block_number": 52339437,
+      "anchored_at": "2026-10-08T14:03:41Z",
+      "recorded_by": "scripts/anchor_root.py"
+    },
+    {
+      "wall_id": "wall_01",
+      "chain_id": 8453,
+      "root": "bfecebde01b53d548a247f81a1a832e616684cbd0036b90ded0e19a09c1e1ebe",
+      "payload": "TFW1|bfecebde01b53d548a247f81a1a832e616684cbd0036b90ded0e19a09c1e1ebe",
+      "signer": "0x39A8546448baFd5E98f513022A772555c2082465",
+      "tx_hash": "0x8313e0d90c76f6e2abe0de0ab20528d32cc65dd97811c6d96e6f1a3e0d6e4418",
+      "block_number": 52347619,
+      "anchored_at": "2026-10-08T18:36:25Z",
+      "recorded_by": "scripts/anchor_root.py"
+    },
+    {
+      "wall_id": "wall_01",
+      "chain_id": 8453,
+      "root": "724dce52c34b46e05a27f26c3e8af5cc1ad6cf18529281cb1bc7cb60e7a092b5",
+      "payload": "TFW1|724dce52c34b46e05a27f26c3e8af5cc1ad6cf18529281cb1bc7cb60e7a092b5",
+      "signer": "0x39A8546448baFd5E98f513022A772555c2082465",
+      "tx_hash": "0x7fd6478d7aae214a332c0ec8cdea318e9146574bbe9127ecee5a8307b9adcbd2",
+      "block_number": 52428642,
+      "anchored_at": "2026-10-10T15:37:11Z",
+      "recorded_by": "scripts/anchor_root.py"
+    },
+    {
+      "wall_id": "wall_01",
+      "chain_id": 8453,
+      "root": "0c8ca2ae4b2774e3fa6f2c7e4b65573723e7a57211b8be8c4719244808caaa76",
+      "root_scheme": "TFW2",
+      "payload": "TFW2|0c8ca2ae4b2774e3fa6f2c7e4b65573723e7a57211b8be8c4719244808caaa76",
+      "signer": "0x39A8546448baFd5E98f513022A772555c2082465",
+      "tx_hash": "0xc4bb8c7270d754507f7df219cd736a16afc7746ed1b0d26819317afa4a383f23",
+      "block_number": 52466861,
+      "anchored_at": "2026-10-11T12:51:09Z",
+      "recorded_by": "scripts/anchor_root.py"
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-# Specification: The First Wall Attestation Schema (Version 1.3)
+# Specification: The First Wall Attestation Schema (Version 1.4)
 
 Canonical JSON Schema and validation invariants for inscriptions on **The First Wall (`thefirstwall.ai`)**.
 
@@ -184,10 +184,9 @@ or updates a slot may change nothing else but that slot's three files and the ge
 infrastructure changes ride in their own pull requests, where the base-branch run verifies the
 base data and the containment rule only and a separate self-check runs the pull request's own
 code against its own data. Every recorded anchor must name the
-registered signer and carry `<scheme>|<root>` for a known scheme (`TFW2|` now, `TFW1|` for the
-anchors recorded before the migration); the latest anchor is proven on Base on every run.
+registered signer and carry `reckoning|<root>`; the latest anchor is proven on Base on every run.
 
-### 2.12 State root (TFW2) and inclusion proofs
+### 2.12 State root (the Reckoning) and inclusion proofs
 
 `merkle_root` is the [RFC 6962 §2.1](https://www.rfc-editor.org/rfc/rfc6962#section-2.1)
 Merkle tree hash over the claimed slots in ascending slot order (index 0 is the lowest slot):
@@ -203,9 +202,10 @@ publishes every leaf hash with its index. The leaf hash is the block's content i
 stranger reproduces it with `(printf '\x00'; cat <slot>.json <slot>.webp) | shasum -a 256`.
 `scripts/merkle_proof.py <slot_id>` yields the audit path from a leaf to the root, and
 `--verify` checks a proof against nothing but the slot's two files and the root anchored on
-Base (`TFW2|<root>`). A supersession voucher changes a slot's bytes, so it changes that
+Base (`reckoning|<root>`). A supersession voucher changes a slot's bytes, so it changes that
 slot's leaf and the root; the previous leaf stays provable against the previous anchor.
 
-The retired TFW1 construction (a flat SHA-256 over every dossier followed by its icon, in
-sorted order) is kept as `ledger_core.compute_state_root_v1` so the roots the TFW1 anchors
-committed can be re-derived from history.
+The scheme is named `reckoning` ("The Reckoning": every entry reconciled into one root) and it
+is the only scheme. The earlier flat-hash construction was retired on 2026-10-11 by a clean
+break: its anchors, and the one that carried the Reckoning root under an interim tag, are kept
+in `ledger/anchors_superseded.json` for the record and are not verified.

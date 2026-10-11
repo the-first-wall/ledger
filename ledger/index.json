@@ -7,7 +7,7 @@
   "total_slots": 10000,
   "claimed_slots": 2,
   "merkle_root": "0c8ca2ae4b2774e3fa6f2c7e4b65573723e7a57211b8be8c4719244808caaa76",
-  "root_scheme": "TFW2",
+  "root_scheme": "reckoning",
   "tree_size": 2,
   "leaf_hash": "sha256(0x00 || dossier_bytes || icon_bytes)",
   "leaves": [
