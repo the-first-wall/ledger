@@ -226,7 +226,7 @@
     "ownership_lineage": {
       "type": "array",
       "maxItems": 64,
-      "description": "Immutable historical chain of former owners when a slot is transferred or sold. One entry is appended per transfer, recording the outgoing owner as inscribed (moniker, wallet, soul_hash, inscription tx) and their release: transfer_signature, an EIP-191 personal_sign by the outgoing wallet over 'thefirstwall.ai|transfer|<slot_id>|<from_wallet>|<to_wallet>|<n>' (n = the entry's index). The sale itself is settled between the parties outside the ledger; sale_price_usdc and transfer_tx_hash are the parties' own record and are not verified.",
+      "description": "Immutable historical chain of former owners when a slot is transferred or sold. One entry is appended per transfer, recording the outgoing owner as inscribed (moniker, wallet, soul_hash, inscription tx), the sale price, and their release: transfer_signature, an EIP-191 personal_sign by the outgoing wallet over 'thefirstwall.ai|transfer|<slot_id>|<from_wallet>|<to_wallet>|<n>|<price_micro_usdc>' (n = the entry's index; the price in USDC base units, 0 for a gift). The sale itself is settled between the parties outside the ledger, in USDC on Base: transfer_tx_hash cites the buyer's payment to the seller for at least that price and the ledger proves it on chain. Both the release and the payment are required: a payment alone is not consent, a signature alone does not say what was paid.",
       "items": {
         "type": "object",
         "required": [
@@ -234,7 +234,9 @@
           "wallet_address",
           "acquired_date",
           "relinquished_date",
+          "sale_price_usdc",
           "base_tx_hash",
+          "transfer_tx_hash",
           "soul_hash",
           "transfer_signature"
         ],
@@ -257,15 +259,16 @@
     "update_settlements": {
       "type": "array",
       "maxItems": 256,
-      "description": "Append-only record of the update fees paid to the ledger: every change of an inscribed block by its owner (a transfer to a new owner included) settles one USDC transfer from the owner's wallet to pay_to of at least the tier's update_price_usdc, and appends exactly one entry here.",
+      "description": "Append-only record of the update fees paid to the ledger: every change of an inscribed block by its owner (a transfer to a new owner included) settles one USDC transfer from the owner's wallet to pay_to of at least the update_price_usdc of the tier the WALL is in at the time (the same fee for every block), and appends exactly one entry here naming that tier.",
       "items": {
         "type": "object",
-        "required": ["tx_hash", "wallet_address", "amount_usdc", "kind", "at"],
+        "required": ["tx_hash", "wallet_address", "amount_usdc", "kind", "tier", "at"],
         "properties": {
           "tx_hash": { "$ref": "#/$defs/txHash" },
           "wallet_address": { "$ref": "#/$defs/address" },
           "amount_usdc": { "type": "number", "minimum": 0 },
           "kind": { "type": "string", "enum": ["update", "transfer"] },
+          "tier": { "type": "string", "enum": ["genesis", "tier-2", "tier-3", "tier-4", "tier-5"] },
           "at": { "type": "string", "format": "date-time" }
         },
         "additionalProperties": false

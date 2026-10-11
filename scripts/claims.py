@@ -130,43 +130,58 @@ def verify_claim_signature(dossier: Dict[str, Any]) -> str:
 # --- The transfer release ------------------------------------------------------
 #
 # A sale is settled between seller and buyer outside the ledger (the ledger is
-# no party to it and verifies no sale payment). What the ledger needs is the
-# seller's consent: the RELEASE, an EIP-191 personal_sign by the outgoing
+# no party to it and holds nothing). What the ledger needs is the seller's
+# consent AND the price: the RELEASE, an EIP-191 personal_sign by the outgoing
 # owner over
 #
-#     thefirstwall.ai|transfer|<slot_id>|<from_wallet>|<to_wallet>|<n>
+#     thefirstwall.ai|transfer|<slot_id>|<from_wallet>|<to_wallet>|<n>|<price_micro_usdc>
 #
 # where n is the number of previous owners already on record (the index the
-# new ownership_lineage entry takes), so a release can never be replayed.
+# new ownership_lineage entry takes, so a release can never be replayed) and
+# price_micro_usdc is the sale price in USDC base units (6 decimals; 0 for a
+# gift). A transaction alone proves nothing — anyone can send a seller money —
+# so the seller's signature is what moves the block; and a signature alone
+# does not say what was paid, so the buyer's USDC payment to the seller on
+# Base (transfer_tx_hash, at least the signed price) is required too and is
+# proven on chain.
 
-def transfer_message(slot_id: Any, from_wallet: Any, to_wallet: Any, index: int) -> str:
+def price_micro(usdc: Any) -> int:
+    return int(round(float(usdc) * 1_000_000))
+
+
+def transfer_message(slot_id: Any, from_wallet: Any, to_wallet: Any, index: int, sale_price_usdc: Any) -> str:
     return (f"{TRANSFER_MESSAGE_PREFIX}{str(slot_id).lower()}|{str(from_wallet).lower()}|"
-            f"{str(to_wallet).lower()}|{int(index)}")
+            f"{str(to_wallet).lower()}|{int(index)}|{price_micro(sale_price_usdc)}")
 
 
-def sign_transfer(slot_id: str, from_wallet: str, to_wallet: str, index: int, private_key: str) -> str:
+def sign_transfer(slot_id: str, from_wallet: str, to_wallet: str, index: int, sale_price_usdc: Any,
+                  private_key: str) -> str:
     """The seller's release signature (never logs the key)."""
     from eth_account import Account
     from eth_account.messages import encode_defunct
-    signed = Account.sign_message(encode_defunct(text=transfer_message(slot_id, from_wallet, to_wallet, index)),
-                                  private_key=private_key)
+    message = transfer_message(slot_id, from_wallet, to_wallet, index, sale_price_usdc)
+    signed = Account.sign_message(encode_defunct(text=message), private_key=private_key)
     sig = signed.signature.hex()
     return sig if sig.startswith("0x") else "0x" + sig
 
 
-def verify_transfer_release(slot_id: str, from_wallet: str, to_wallet: str, index: int, signature: Any) -> str:
+def verify_transfer_release(slot_id: str, from_wallet: str, to_wallet: str, index: int,
+                            sale_price_usdc: Any, signature: Any) -> str:
     if not signature:
         raise ValueError(
             "transfer_signature is missing: the outgoing owner releases the block by signing "
-            "thefirstwall.ai|transfer|<slot_id>|<from_wallet>|<to_wallet>|<n> (scripts/sign_transfer.py)."
+            "thefirstwall.ai|transfer|<slot_id>|<from_wallet>|<to_wallet>|<n>|<price_micro_usdc> "
+            "(scripts/sign_transfer.py)."
         )
-    signer = recover_signer(transfer_message(slot_id, from_wallet, to_wallet, index), signature)
+    if sale_price_usdc is None:
+        raise ValueError("sale_price_usdc is missing: the release names the price (0 for a gift).")
+    signer = recover_signer(transfer_message(slot_id, from_wallet, to_wallet, index, sale_price_usdc), signature)
     if signer.lower() != str(from_wallet).lower():
         raise ValueError(
             f"transfer_signature was made by {signer}, not by the outgoing owner {from_wallet}; "
             "the block was not released."
         )
-    return f"released by {signer}"
+    return f"released by {signer} for {float(sale_price_usdc):.2f} USDC"
 
 
 def verify_lineage_chain(dossier: Dict[str, Any]) -> str:
@@ -182,7 +197,8 @@ def verify_lineage_chain(dossier: Dict[str, Any]) -> str:
         to = lineage[i + 1].get("wallet_address") if i + 1 < len(lineage) and isinstance(lineage[i + 1], dict) \
             else dossier.get("wallet_address")
         try:
-            verify_transfer_release(slot_id, entry.get("wallet_address", ""), to, i, entry.get("transfer_signature"))
+            verify_transfer_release(slot_id, entry.get("wallet_address", ""), to, i,
+                                    entry.get("sale_price_usdc"), entry.get("transfer_signature"))
         except ValueError as e:
             raise ValueError(f"ownership_lineage[{i}]: {e}")
     return f"{len(lineage)} transfer(s), each released by its outgoing owner" if lineage else "no transfers"

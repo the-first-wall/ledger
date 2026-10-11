@@ -5,14 +5,15 @@ The First Wall — Record an update fee
 
     python scripts/record_update.py ledger/w1/w1-b0042.json 0x<tx_hash> --write
     python scripts/record_update.py ledger/w1/w1-b0042.json 0x<tx_hash> --kind transfer --write
-    python scripts/record_update.py --price w1-b0042          # what an update of this block costs
+    python scripts/record_update.py --price          # what an update costs right now (any block)
 
 Every change of an inscribed block by its owner — a transfer to a new owner
 included — settles one USDC transfer from the owner's wallet (the buyer's, on
-a transfer) to pay_to of at least the tier's update price, and appends exactly
-one entry to update_settlements[]:
+a transfer) to pay_to of at least the update price of the tier the WALL is in
+(the same for every block, whatever its number), and appends exactly one
+entry to update_settlements[] naming that tier:
 
-    {"tx_hash", "wallet_address", "amount_usdc", "kind": "update"|"transfer", "at"}
+    {"tx_hash", "wallet_address", "amount_usdc", "kind": "update"|"transfer", "tier", "at"}
 
 This tool reads the transfer from Base with the verifier's own routine
 (sender, payee, amount, finality) and appends the entry. No key is involved.
@@ -29,13 +30,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ledger_core as core  # noqa: E402
 import verifier  # noqa: E402
 
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
-def main(argv: list, rpc=None) -> int:
+
+def main(argv: list, rpc=None, base_dir: str = BASE_DIR) -> int:
+    wall = core.current_tier(base_dir)
     if "--price" in argv:
-        slot_id = argv[argv.index("--price") + 1]
-        tier = core.pricing_for(core.slot_number(slot_id))
-        print(f"{slot_id}: {tier['tier']} tier, update price {tier['update_price_usdc']:.2f} USDC "
-              f"(block price {tier['price_usdc']:.2f} USDC)")
+        print(f"the wall is in the {wall['tier']} tier: update price {wall['update_price_usdc']:.2f} USDC "
+              f"for every block (claim floor {wall['price_usdc']:.2f} USDC)")
         return 0
     positional = [a for i, a in enumerate(argv)
                   if not a.startswith("--") and (i == 0 or argv[i - 1] not in ("--kind", "--at"))]
@@ -50,7 +52,7 @@ def main(argv: list, rpc=None) -> int:
     d = core.load_json_strict(path)
     slot_id = str(d.get("slot_id", ""))
     wallet = str(d.get("wallet_address", ""))
-    price = verifier.update_price_for(slot_id)
+    price = float(wall["update_price_usdc"])
     for i, item in enumerate(d.get("update_settlements") or []):
         if str(item.get("tx_hash", "")).lower() == tx:
             print(f"[=] {tx[:12]}… is already update_settlements[{i}]")
@@ -64,9 +66,9 @@ def main(argv: list, rpc=None) -> int:
     at = argv[argv.index("--at") + 1] if "--at" in argv else \
         _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     entry = {"tx_hash": tx, "wallet_address": wallet, "amount_usdc": float(r["amount_usdc"]),
-             "kind": kind, "at": at}
+             "kind": kind, "tier": wall["tier"], "at": at}
     print("[*] entry   : " + json.dumps(entry))
-    print(f"[*] covers  : {price:.2f} USDC {kind} fee for {slot_id}")
+    print(f"[*] covers  : {price:.2f} USDC {kind} fee for {slot_id} (wall in the {wall['tier']} tier)")
     if "--write" in argv:
         d.setdefault("update_settlements", []).append(entry)
         with open(path, "w", encoding="utf-8") as fh:
