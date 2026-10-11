@@ -5,7 +5,9 @@ name: Verify Inscription & Merkle State
 # manifests, generated state); nothing executable is ever taken from the PR, so
 # a claim PR cannot change the rules it is checked against. Infrastructure
 # changes (scripts/, schemas/, .github/) ride in their own PRs, where the
-# containment rule forbids touching a slot at the same time.
+# containment rule forbids touching a slot at the same time; for those the
+# base code verifies the base data and the containment rule only, and the
+# self-check workflow verifies the PR's own code against its own data.
 on:
   pull_request_target:
     types: [opened, synchronize, reopened]
@@ -52,18 +54,26 @@ jobs:
           # Only data paths are taken from the PR. scripts/, schemas/, tests/,
           # .github/ and docs stay exactly as they are on the base branch.
           git diff --no-renames --name-status "$BASE" refs/remotes/pr/head > /tmp/changed.tsv
-          while IFS=$'\t' read -r status path; do
-            case "$path" in
-              ledger/*|state.json|canvas/*) ;;
-              *) echo "  (ignoring non-data change: $status $path)"; continue ;;
-            esac
-            if [ "${status:0:1}" = "D" ]; then
-              rm -f -- "$path"
-            else
-              git checkout refs/remotes/pr/head -- "$path"
-            fi
-            echo "  overlaid: $status $path"
-          done < /tmp/changed.tsv
+          # An infrastructure PR (anything outside the data paths: scripts/,
+          # schemas/, tests/, workflows, docs) is verified by the self-check job
+          # with its own code. Overlaying state that its code generated onto the
+          # base code would compare two rule sets and fail by construction, so
+          # here the base code verifies the base data unchanged and checks
+          # containment on the full diff: a slot touched together with code
+          # still fails (check_scope reads TFW_DIFF_RANGE).
+          if cut -f2- /tmp/changed.tsv | grep -v -E '^(ledger/|state\.json$|canvas/)' | grep -q .; then
+            echo "infrastructure change: no data overlay; base data verified as is, containment checked on the full diff"
+            cut -f2- /tmp/changed.tsv | grep -v -E '^(ledger/|state\.json$|canvas/)' | sed 's/^/  non-data: /'
+          else
+            while IFS=$'\t' read -r status path; do
+              if [ "${status:0:1}" = "D" ]; then
+                rm -f -- "$path"
+              else
+                git checkout refs/remotes/pr/head -- "$path"
+              fi
+              echo "  overlaid: $status $path"
+            done < /tmp/changed.tsv
+          fi
           echo "TFW_DIFF_RANGE=${BASE}...refs/remotes/pr/head" >> "$GITHUB_ENV"
 
       - name: Define the change range for a push to main
