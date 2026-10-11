@@ -181,5 +181,7 @@ the soul manifest name must all agree, and `reserved_grant.slot` must name the s
 CI always runs the verifier, schema and tests **from the base branch** and overlays only the
 pull request's ledger data (`ledger/`, `state.json`, `canvas/`). A pull request that inscribes
 or updates a slot may change nothing else but that slot's three files and the generated state;
-infrastructure changes ride in their own pull requests. Every recorded anchor must name the
+infrastructure changes ride in their own pull requests, where the base-branch run verifies the
+base data and the containment rule only and a separate self-check runs the pull request's own
+code against its own data. Every recorded anchor must name the
 registered signer and carry `TFW1|<root>`; the latest anchor is proven on Base on every run.
