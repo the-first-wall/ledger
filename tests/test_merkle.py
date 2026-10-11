@@ -1,4 +1,4 @@
-"""TFW2 state root: RFC 6962 tree hash, inclusion proofs, scheme-aware anchors."""
+"""The Reckoning: RFC 6962 tree hash, inclusion proofs, anchor tags."""
 import hashlib
 import json
 import os
@@ -110,7 +110,7 @@ class LedgerRootTests(unittest.TestCase):
         self.assertEqual(core.compute_merkle_root(self.w1, slots), core.merkle_tree_hash(leaves).hex())
         state, index = core.build_state(self.td)
         self.assertEqual(state["merkle_root"], core.compute_merkle_root(self.w1, slots))
-        self.assertEqual((state["root_scheme"], state["tree_size"]), ("TFW2", 3))
+        self.assertEqual((state["root_scheme"], state["tree_size"]), ("reckoning", 3))
         self.assertEqual([l["slot_id"] for l in index["leaves"]], ["w1-b0001", "w1-b0007", "w1-b0012"])
         self.assertEqual(index["leaves"][1]["leaf_hash"], leaves[1].hex())
         self.assertEqual([l["index"] for l in index["leaves"]], [0, 1, 2])
@@ -125,13 +125,6 @@ class LedgerRootTests(unittest.TestCase):
         self.assertEqual(before["w1-b0001"], after["w1-b0001"])
         self.assertEqual(before["w1-b0012"], after["w1-b0012"])
 
-    def test_legacy_v1_root_is_the_flat_hash(self):
-        slots = core.list_slot_files(self.w1)
-        flat = hashlib.sha256()
-        for sid in ("w1-b0001", "w1-b0007", "w1-b0012"):
-            flat.update(self.files[sid])
-        self.assertEqual(core.compute_state_root_v1(self.w1, slots), flat.hexdigest())
-        self.assertNotEqual(core.compute_state_root_v1(self.w1, slots), core.compute_merkle_root(self.w1, slots))
 
     def test_empty_ledger_root(self):
         empty = os.path.join(self.td, "empty")
@@ -143,37 +136,48 @@ class LedgerRootTests(unittest.TestCase):
 class AnchorSchemeTests(unittest.TestCase):
     ROOT = "ab" * 32
 
-    def test_current_and_legacy_payloads_accepted(self):
-        self.assertEqual(core.anchor_payload_of({"root": self.ROOT, "payload": "TFW2|" + self.ROOT}), "TFW2|" + self.ROOT)
-        self.assertEqual(core.anchor_payload_of({"root": self.ROOT, "payload": "TFW1|" + self.ROOT}), "TFW1|" + self.ROOT)
-        self.assertEqual(core.anchor_payload_of({"root": self.ROOT}), "TFW2|" + self.ROOT)
-
-    def test_unknown_scheme_or_wrong_root_rejected(self):
-        for bad in ("TFW3|" + self.ROOT, "TFW2|" + "cd" * 32, self.ROOT, "TFW2|"):
+    def test_only_the_reckoning_tag_is_accepted(self):
+        self.assertEqual(core.anchor_payload_of({"root": self.ROOT, "payload": "reckoning|" + self.ROOT}),
+                         "reckoning|" + self.ROOT)
+        self.assertEqual(core.anchor_payload_of({"root": self.ROOT}), "reckoning|" + self.ROOT)
+        for bad in ("TFW1|" + self.ROOT, "TFW2|" + self.ROOT, "flat|" + self.ROOT,
+                    "reckoning|" + "cd" * 32, self.ROOT, "reckoning|"):
             with self.subTest(payload=bad), self.assertRaises(ValueError):
                 core.anchor_payload_of({"root": self.ROOT, "payload": bad})
 
-    def test_on_chain_check_uses_the_records_scheme(self):
+    def test_on_chain_check_requires_the_reckoning_calldata(self):
         signer = core.ANCHOR_SIGNER
+
         def rpc_for(payload):
             def rpc(method, params):
                 if method == "eth_getTransactionByHash":
                     return {"from": signer, "to": signer.lower(), "input": "0x" + payload.encode().hex()}
                 return {"status": "0x1", "blockNumber": "0x10"}
             return rpc
-        legacy = {"root": self.ROOT, "payload": "TFW1|" + self.ROOT, "tx_hash": "0x" + "11" * 32, "block_number": 16}
-        self.assertIn("block 16", core.verify_anchor_on_chain(legacy, rpc_for("TFW1|" + self.ROOT)))
-        with self.assertRaises(ValueError):
-            core.verify_anchor_on_chain(legacy, rpc_for("TFW2|" + self.ROOT))   # chain says TFW2, record says TFW1
-        current = dict(legacy, payload="TFW2|" + self.ROOT)
-        self.assertIn("block 16", core.verify_anchor_on_chain(current, rpc_for("TFW2|" + self.ROOT)))
 
-    def test_committed_anchor_records_name_a_known_scheme(self):
+        entry = {"root": self.ROOT, "payload": "reckoning|" + self.ROOT, "tx_hash": "0x" + "11" * 32, "block_number": 16}
+        self.assertIn("block 16", core.verify_anchor_on_chain(entry, rpc_for("reckoning|" + self.ROOT)))
+        with self.assertRaises(ValueError):
+            core.verify_anchor_on_chain(entry, rpc_for("TFW2|" + self.ROOT))     # chain carries the retired tag
+        with self.assertRaises(ValueError):
+            core.verify_anchor_on_chain(dict(entry, payload="TFW2|" + self.ROOT), rpc_for("TFW2|" + self.ROOT))
+
+    def test_committed_anchor_records(self):
         base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
         with open(os.path.join(base, "ledger", "anchors.json")) as fh:
-            for entry in json.load(fh):
-                core.anchor_payload_of(entry)
-                self.assertTrue(entry.get("anchored_at"), entry["tx_hash"])   # F-24: never empty again
+            live = json.load(fh)
+        self.assertIsInstance(live, list)
+        for entry in live:
+            core.anchor_payload_of(entry)
+            self.assertTrue(entry.get("anchored_at"), entry["tx_hash"])
+        with open(os.path.join(base, "ledger", "anchors_superseded.json")) as fh:
+            retired = json.load(fh)
+        self.assertEqual(retired["retired_on"], "2026-10-11")
+        self.assertEqual(len(retired["records"]), 4)
+        for entry in retired["records"]:
+            self.assertFalse(str(entry["payload"]).startswith("reckoning|"))   # nothing retired is current
+            with self.assertRaises(ValueError):
+                core.anchor_payload_of(entry)                                  # and nothing retired verifies
 
 
 if __name__ == "__main__":

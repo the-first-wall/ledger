@@ -11,7 +11,7 @@ operators — can rewrite.
 Design
 ------
 * **No smart contract required.** The anchor is a 0-value self-transaction whose
-  calldata is ``TFW2|<merkle_root>`` (ASCII). Its inclusion in a Base block is a
+  calldata is ``reckoning|<merkle_root>`` (ASCII). Its inclusion in a Base block is a
   permanent, verifiable, timestamped commitment to that exact root.
 * **Append-only record.** Every successful anchor is appended to
   ``ledger/anchors.json`` (never edited, never deleted), so the anchoring history
@@ -47,7 +47,7 @@ STATE_PATH = os.path.join(BASE_DIR, "state.json")
 ANCHORS_PATH = os.path.join(BASE_DIR, "ledger", "anchors.json")
 
 CHAIN_ID = core.CHAIN_ID
-MAGIC = core.ANCHOR_MAGIC   # "TFW2|" — the scheme of the root being committed
+MAGIC = core.ANCHOR_MAGIC   # "reckoning|" — the scheme of the root being committed
 GAS_LIMIT_BUFFER = 10_000
 RECEIPT_POLLS = 30
 RECEIPT_POLL_SECONDS = 2
@@ -56,7 +56,7 @@ RECEIPT_POLL_SECONDS = 2
 # --- Payload & local records -------------------------------------------------
 
 def anchor_payload(root: str) -> str:
-    """The exact ASCII calldata committed on-chain: `TFW2|<root>`."""
+    """The exact ASCII calldata committed on-chain: `reckoning|<root>`."""
     return f"{MAGIC}{root}"
 
 
@@ -107,8 +107,7 @@ def do_dry_run(state: Dict[str, Any]) -> int:
 def do_check(state: Dict[str, Any], on_chain: bool = False) -> int:
     """--check: is the live root the latest recorded anchor?
     --check-anchor: additionally prove the recorded anchor on Base itself
-    (tx exists, succeeded, sent by the registered signer, carries <scheme>|<root>
-    for the scheme the record names).
+    (tx exists, succeeded, sent by the registered signer, carries reckoning|<root>).
     anchors.json is only a record; the chain is the witness."""
     anchors = load_anchors()
     root = state["merkle_root"]

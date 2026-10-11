@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-The First Wall — Inclusion proofs for the TFW2 state root
+The First Wall — Inclusion proofs for the state root (the Reckoning)
 =========================================================
 
 Every claimed slot is a leaf of an RFC 6962 Merkle tree (see ledger_core).
@@ -13,7 +13,7 @@ and verifies such a proof against nothing but the slot's two files.
     python scripts/merkle_proof.py --verify proof.json <dossier> <icon> --root <hex>   # pin the root
 
 A proof is only as good as the root it ends in: compare `root` with the one
-anchored on Base (ledger/anchors.json, payload `TFW2|<root>`).
+anchored on Base (ledger/anchors.json, payload `reckoning|<root>`).
 """
 
 from __future__ import annotations

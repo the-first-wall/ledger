@@ -101,7 +101,7 @@ INVARIANTS = [
     },
     {
         "id": "state-root-merkle",
-        "summary": "The state root (TFW2) is an RFC 6962 Merkle tree over the claimed slots in "
+        "summary": "The state root (the Reckoning) is an RFC 6962 Merkle tree over the claimed slots in "
                    "ascending slot order: leaf = sha256(0x00 || dossier_bytes || icon_bytes), "
                    "node = sha256(0x01 || left || right), empty tree = sha256(''). state.json, "
                    "ledger/index.json (every leaf hash) and the canvas composite are generated and "
@@ -111,9 +111,10 @@ INVARIANTS = [
     },
     {
         "id": "anchor-integrity",
-        "summary": "Every entry in ledger/anchors.json names the registered signer and <scheme>|<root> "
-                   "(TFW2 now; TFW1 for anchors recorded before the migration); the latest anchor is "
-                   "proven on Base (tx exists, succeeded, self-send from the signer, exact calldata).",
+        "summary": "Every entry in ledger/anchors.json names the registered signer and reckoning|<root>; "
+                   "the latest anchor is proven on Base (tx exists, succeeded, self-send from the signer, "
+                   "exact calldata). Anchors of the retired flat-hash root live in "
+                   "ledger/anchors_superseded.json, outside verification.",
         "enforced_by": "scripts/ledger_core.py::verify_anchor_on_chain",
     },
     {
@@ -184,7 +185,7 @@ def build_spec() -> dict:
 
     return {
         "spec": "thefirstwall/attestation",
-        "spec_version": "1.3",
+        "spec_version": "1.4",
         "title": "The First Wall — Attestation Specification",
         "description": "Machine-readable specification and validation invariants for inscriptions "
                        "on The First Wall (Wall 01). Companion to spec.md.",
@@ -212,12 +213,13 @@ def build_spec() -> dict:
         "anchoring": {
             "signer": core.ANCHOR_SIGNER,
             "calldata": core.ANCHOR_MAGIC + "<merkle_root>",
-            "legacy_calldata": [m + "<merkle_root>" for m in core.LEGACY_ANCHOR_MAGICS],
             "record": "ledger/anchors.json",
+            "superseded_record": "ledger/anchors_superseded.json",
             "cadence": "every push to main that changes the root",
         },
         "state_root": {
             "scheme": core.ROOT_SCHEME,
+            "name": core.ROOT_SCHEME_TITLE,
             "construction": "RFC 6962 Merkle tree hash",
             "hash": "sha256",
             "leaf_data": "bytes(ledger/w1/<slot_id>.json) || bytes(ledger/w1/<slot_id>.webp)",

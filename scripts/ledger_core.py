@@ -5,8 +5,9 @@ The First Wall — Shared Deterministic Ledger Core
 
 Single source of truth for:
   * which files constitute the ledger,
-  * how the Merkle state root (TFW2, an RFC 6962 tree over the slots) is
-    computed and how an inclusion proof for one slot is built and verified,
+  * how the Merkle state root (the Reckoning: an RFC 6962 tree over the
+    slots) is computed and how an inclusion proof for one slot is built and
+    verified,
   * how `state.json`, `ledger/index.json` and `ledger/settlements.json` are derived,
   * the hard bounds the verifier enforces (slot ids, file sizes, icon shape,
     settlement finality, anchor signer).
@@ -66,14 +67,15 @@ PAY_TO = "0xbbF4D6B954e97C2C4fbC4e89B7933cDD7e4D9f23"
 # anchor transaction is authentic only if it was sent by this gas-only signer;
 # the verifier checks every recorded anchor against the chain.
 ANCHOR_SIGNER = "0x39A8546448baFd5E98f513022A772555c2082465"
-# The scheme of the root committed on chain. TFW2 is an RFC 6962 Merkle tree
-# over the slots (see "TFW2 state root" below), so every slot has an inclusion
-# proof against the anchored root. TFW1 was a flat SHA-256 over the concatenated
-# files; the anchors recorded under it stay valid for the roots they committed.
-ROOT_SCHEME = "TFW2"
+# The scheme of the root committed on chain: the Reckoning, an RFC 6962 Merkle
+# tree over the slots (see "The Reckoning" below), so every slot has an
+# inclusion proof against the anchored root. It is the only scheme. The anchors
+# recorded under the earlier flat-hash construction (and under the interim tag
+# the Reckoning root first carried) were retired on 2026-10-11 by a clean
+# break: they live in ledger/anchors_superseded.json, outside verification.
+ROOT_SCHEME = "reckoning"
+ROOT_SCHEME_TITLE = "The Reckoning"
 ANCHOR_MAGIC = ROOT_SCHEME + "|"
-LEGACY_ANCHOR_MAGICS = ("TFW1|",)
-ANCHOR_MAGICS = (ANCHOR_MAGIC,) + LEGACY_ANCHOR_MAGICS
 
 SETTLEMENT_RAIL_LABEL = "Base mainnet (USDC x402)"
 
@@ -271,21 +273,19 @@ def build_settlements(base_dir: str) -> Tuple[Dict[str, Any], List[Dict[str, Any
 # --- Anchor verification -----------------------------------------------------
 
 def anchor_payload_of(entry: Dict[str, Any]) -> str:
-    """The calldata an anchor record commits to: `<scheme>|<root>` for a known
-    scheme (TFW2 now, TFW1 for the anchors recorded before the migration).
-    Raises ValueError for anything else."""
+    """The calldata an anchor record commits to: `reckoning|<root>`. Raises
+    ValueError for any other scheme tag or a payload whose root is not the
+    record's."""
     root = str(entry.get("root", ""))
     payload = str(entry.get("payload") or (ANCHOR_MAGIC + root))
-    if not any(payload == magic + root for magic in ANCHOR_MAGICS):
-        known = ", ".join(m[:-1] for m in ANCHOR_MAGICS)
-        raise ValueError(f"anchor payload {payload!r} is not <scheme>|<root> for a known scheme ({known})")
+    if payload != ANCHOR_MAGIC + root:
+        raise ValueError(f"anchor payload {payload!r} is not {ANCHOR_MAGIC}<root> for this record's root")
     return payload
 
 
 def verify_anchor_on_chain(entry: Dict[str, Any], rpc=None) -> str:
     """A recorded anchor must exist on Base, be a successful self-send from the
-    registered signer, and carry exactly `<scheme>|<root>` as calldata (the
-    scheme the record names: TFW2, or TFW1 for pre-migration anchors). Shared
+    registered signer, and carry exactly `reckoning|<root>` as calldata. Shared
     by the verifier and `anchor_root.py --check-anchor`."""
     rpc = rpc or rpc_call
     expected = anchor_payload_of(entry)
@@ -316,7 +316,7 @@ def verify_anchor_on_chain(entry: Dict[str, Any], rpc=None) -> str:
 
 # --- Root & state derivation ------------------------------------------------
 
-# --- TFW2 state root: an RFC 6962 Merkle tree over the slots ------------------
+# --- The Reckoning: the state root as an RFC 6962 Merkle tree over the slots ---
 #
 #   leaf data   d_i  = bytes(ledger/w1/<slot>.json) || bytes(ledger/w1/<slot>.webp)
 #   leaf hash        = SHA-256(0x00 || d_i)
@@ -416,18 +416,8 @@ def compute_leaves(slot_dir: str, slots: List[str]) -> List[Tuple[str, bytes]]:
 
 
 def compute_merkle_root(slot_dir: str, slots: List[str]) -> str:
-    """The TFW2 state root: hex RFC 6962 tree hash over the slot leaves."""
+    """The state root (the Reckoning): hex RFC 6962 tree hash over the slot leaves."""
     return merkle_tree_hash([h for _, h in compute_leaves(slot_dir, slots)]).hex()
-
-
-def compute_state_root_v1(slot_dir: str, slots: List[str]) -> str:
-    """The retired TFW1 construction (flat SHA-256 over every dossier followed
-    by its icon, in sorted order), kept so the roots the TFW1 anchors committed
-    can be re-derived from history."""
-    hasher = hashlib.sha256()
-    for slot_file in sorted(slots):
-        hasher.update(leaf_data(slot_dir, slot_file))
-    return hasher.hexdigest()
 
 
 def pricing_for(slot_number_: int) -> Dict[str, Any]:

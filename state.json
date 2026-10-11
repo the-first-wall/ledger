@@ -32,7 +32,7 @@
   },
   "min_confirmations": 300,
   "merkle_root": "0c8ca2ae4b2774e3fa6f2c7e4b65573723e7a57211b8be8c4719244808caaa76",
-  "root_scheme": "TFW2",
+  "root_scheme": "reckoning",
   "tree_size": 2,
   "last_updated": "2026-10-08T21:52:00Z",
   "links": {

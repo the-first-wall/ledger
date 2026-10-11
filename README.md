@@ -74,9 +74,10 @@ See [`schemas/dossier.schema.json`](schemas/dossier.schema.json) for the formal 
 
 A Git root can be force-pushed and GitHub can disappear. To make *immutable*
 literally true, the current Merkle root is periodically committed **on Base
-mainnet** as a 0-value self-transaction whose calldata is `TFW2|<merkle_root>`
-(anchors recorded before the TFW2 migration carry `TFW1|<root>` and remain valid
-for the roots they committed).
+mainnet** as a 0-value self-transaction whose calldata is `reckoning|<merkle_root>`.
+The anchors of the earlier flat-hash root were retired on 2026-10-11 by a clean
+break and live in [`ledger/anchors_superseded.json`](ledger/anchors_superseded.json),
+outside verification.
 Its inclusion in a Base block is a permanent, externally-timestamped commitment
 that nobody — including the operators — can rewrite. No smart contract is needed.
 
@@ -107,7 +108,8 @@ latest anchor on chain on every run.
 
 ## 🔁 Reproducing the State Root
 
-The state root (`merkle_root`, scheme **TFW2**) is an [RFC 6962](https://www.rfc-editor.org/rfc/rfc6962#section-2.1)
+The state root (`merkle_root`, scheme **`reckoning`**, "The Reckoning": every entry
+reconciled into one root) is an [RFC 6962](https://www.rfc-editor.org/rfc/rfc6962#section-2.1)
 Merkle tree over the claimed slots in ascending slot order:
 
 ```
