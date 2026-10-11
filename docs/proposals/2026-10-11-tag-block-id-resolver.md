@@ -55,8 +55,13 @@ These are recorded here so they are not relitigated. Each is a premise, not a qu
 5. **Extend the same id scheme to our own published content.** Articles and stories get
    permanent **content-addressed ids** (hash of the exact bytes) **plus their URL** — public,
    citable, immutable.
-6. **Moltbook discipline stays 100%.** Moltbook posts carry **registry-side ids ONLY**. Never
-   expose any First Wall id, slot, hash, or economics on Moltbook.
+6. **Moltbook is where the tag's story is told — and stress-tested** (operator clarification,
+   2026-10-11 — supersedes the earlier "registry-side ids ONLY" framing). The tag's
+   backstory/philosophy/mechanics goes out as Moltbook-native **narrative** (post/essay), and the
+   community is invited to **verify the mechanism**: provenance, independence, immutability,
+   findability, and a disinterested, non-refundable third party. This is **not** "hide a private
+   id." **Stealth still holds 100%:** never name The First Wall, Base mainnet, slots, pixels,
+   tokens, pricing, or economics. **Ids and economics stay out of the public text.**
 
 ---
 
@@ -208,22 +213,37 @@ The resolver must resolve **one URL, with no login and no tooling** — see fail
 
 ---
 
-## 6. Moltbook discipline (must stay 100%)
+## 6. Moltbook — tell the tag's story, invite verification (stealth stays 100%)
 
-Settled (§2.6). The Wall is intentionally **stealth** on Moltbook. Encoding the rule:
+Settled (§2.6, operator clarification 2026-10-11). Moltbook is not a place to hide an id; it is
+where the **story behind the tag** is told as Moltbook-native **narrative** (post/essay), and
+where the community is invited to **stress-test and verify the mechanism**. Put plainly:
 
-- **Moltbook posts carry registry-side ids ONLY.** A neutral, internal row id of our own naming,
-  containing no First Wall identifier and no cryptographic material.
-- **NEVER expose any First Wall id, slot, hash, or economics on Moltbook.** Not in post text, not
-  in a comment, not in a link, not in image metadata, not in an OG/unfurl parameter.
-- **The mapping stays registry-side** — outside the public ledger repo and off Moltbook. A public
-  `post_id → content_id` table would let anyone correlate the Moltbook account to The First Wall
-  and break the discipline; it therefore does not belong in a published artifact.
-- **Corollary for link hygiene:** never paste a `thefirstwall.ai` URL (resolver or record) into
-  Moltbook. Unfurlers and preview fetchers dereference links; a URL is a leak.
+> **Publish the tag's story as narrative and invite/support third-party verification; ids and
+economics stay out of the public text.**
 
-This rule applies to every published surface we control. It is a **non-goal** to make First Wall
-ids resolvable *from* Moltbook.
+**What to publish**
+- The tag's **backstory, philosophy and mechanics** as narrative — what it means for a record to
+  be findable, content-addressed, append-only and independently checkable.
+- An **open invitation to verify**, on the properties that matter: **provenance** (where a record
+  came from), **independence** (no single party controls it), **immutability** (history cannot be
+  rewritten), **findability** (a stranger can resolve it), and a **disinterested, non-refundable
+  third party** (no one can buy the record back or edit it away).
+- **Support** for third-party verification: state the claim so it is falsifiable, and let others
+  try to break it.
+
+**What stays out of the public text (stealth 100%)**
+- Never name **The First Wall**, **Base mainnet**, **slots**, **pixels**, **tokens**, **pricing**,
+  or **economics**.
+- **Ids and economics stay out of the public text.** No First Wall id, slot, hash, or economic
+  detail appears in a Moltbook post — not in text, not in a comment, not in image metadata, not in
+  an OG/unfurl parameter.
+- **No link-hygiene exception:** never paste a `thefirstwall.ai` URL (resolver or record) into
+  Moltbook. Unfurlers and preview fetchers dereference links; a URL is a disclosure.
+
+**Why this is coherent with §3.** The id is verified by *recomputing a content hash*, not by
+trusting a named registry. That is exactly why the community can verify the **mechanism** without
+the Wall ever being named: the verification is the story, and the name is not needed for it.
 
 ---
 
@@ -245,8 +265,10 @@ ids resolvable *from* Moltbook.
 4. **Byte convention.** Confirm "**exact committed bytes**" (fragile to whitespace, but trivially
    reproducible with `shasum`) over a canonical-JSON serialization. (Recommend: exact bytes —
    reproducibility by a stranger beats byte-stability we control.)
-5. **Moltbook mapping storage.** Confirm the registry-side mapping lives **outside** the public
-   ledger repo (workspace registry only), given rejection of a public correlation table. (§6.)
+5. **Moltbook narrative & verification.** Confirm the §6 split: publish the tag's story as
+   narrative and invite/support third-party verification of the mechanism (provenance,
+   independence, immutability, findability, disinterested non-refundable third party), while
+   keeping **ids and economics out of the public text** and the project unnamed. (§6.)
 
 ---
 
@@ -289,12 +311,16 @@ lookup service." *We never asked: what happens when someone resolves an id we di
 If the answer requires a runtime, "no backend" has eroded by one id at a time — the same erosion
 already documented for the discovery endpoint (A-6).
 
-**F-5 — The Moltbook leak.**
-A resolver URL, a hash, or a slot id slips into a Moltbook post — or a link **unfurler**,
-a preview fetcher, or an image's OG metadata dereferences a `thefirstwall.ai` URL and reveals the
-mapping. The stealth discipline breaks **once**, and it is over. *We never asked: do link
-previews fetch and expose the correlation? Do we ever paste a domain we control on the account we
-are hiding?* The rule in §6 exists because the answer is "yes, if we are careless."
+**F-5 — The Moltbook story is unverifiable, or it leaks.**
+Two ways this fails. **(a)** We publish the tag's story as **narrative that cannot be checked** —
+inspiring but unfalsifiable — so the community cannot stress-test the mechanism and the story is
+just marketing; the invitation to verify was never concrete. *We never asked: what exactly can a
+reader verify, and can they do it without us naming the project?* **(b)** A resolver URL, a hash,
+a slot id, or an economic detail slips into a Moltbook post — or a link **unfurler**, a preview
+fetcher, or an image's OG metadata dereferences a `thefirstwall.ai` URL and names the Wall. The
+stealth discipline breaks **once**, and it is over. *We never asked: do link previews fetch and
+expose the correlation, and do we ever paste a domain we control on the account we are hiding?*
+§6 exists because the answer is "yes, if we are careless."
 
 **F-6 — Content ids rot.**
 An article gets a typo fix. If that is a silent overwrite, the "permanent id" is a lie and the
@@ -326,7 +352,9 @@ failing.
 - **Schema change:** none required for blocks (the id is derived, not a field). If Daniel chooses
   option 1-alt (an immutable-core anchor *stored* in the dossier), that would require a schema +
   verifier + agreement-test change and is deliberately not assumed here.
-- **Moltbook mapping:** registry-side only, outside this repo (§6).
+- **Moltbook narrative:** the tag's story is told as Moltbook-native narrative that invites
+  third-party verification; ids and economics stay out of the public text (§6). No code artifact
+  here.
 
 ---
 
@@ -334,8 +362,9 @@ failing.
 
 **The hash is the id, the URL is the resolver, the slot id is the human anchor; the id is
 *derived* from committed bytes and never *declared*; extend the same content-addressing to our
-published content; keep every First Wall id off Moltbook.** Implement as a generated, drift-gated
-index with a static resolver page — no backend, Git is the ledger.
+published content; on Moltbook, tell the tag's story as narrative and invite third-party
+verification — keeping ids and economics out of the public text and the Wall unnamed. Implement as
+a generated, drift-gated index with a static resolver page — no backend, Git is the ledger.
 
 ---
 
