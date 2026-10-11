@@ -134,54 +134,68 @@ def verify_claim_signature(dossier: Dict[str, Any]) -> str:
 # consent AND the price: the RELEASE, an EIP-191 personal_sign by the outgoing
 # owner over
 #
-#     thefirstwall.ai|transfer|<slot_id>|<from_wallet>|<to_wallet>|<n>|<price_micro_usdc>
+#     thefirstwall.ai|transfer|<slot_id>|<from_wallet>|<to_wallet>|<n>|<price_micro_usdc>|<valid_until_block>
 #
 # where n is the number of previous owners already on record (the index the
-# new ownership_lineage entry takes, so a release can never be replayed) and
+# new ownership_lineage entry takes, so a release can never be replayed),
 # price_micro_usdc is the sale price in USDC base units (6 decimals; 0 for a
-# gift). A transaction alone proves nothing — anyone can send a seller money —
-# so the seller's signature is what moves the block; and a signature alone
-# does not say what was paid, so the buyer's USDC payment to the seller on
-# Base (transfer_tx_hash, at least the signed price) is required too and is
-# proven on chain.
+# gift) and valid_until_block is the last Base block in which the buyer's
+# payment may be mined, so an offer expires. This is the OFFER, and it goes
+# first: it is inert on its own (it moves nothing without the payment it
+# names, from the buyer it names, in time), so the seller risks nothing by
+# signing, and the buyer verifies it against main before paying a cent. A
+# transaction alone proves nothing — anyone can send a seller money — so the
+# seller's signature is what moves the block; and a signature alone does not
+# say what was paid, so the buyer's USDC payment to the seller on Base
+# (transfer_tx_hash, at least the signed price, by the deadline) is required
+# too and is proven on chain.
 
 def price_micro(usdc: Any) -> int:
     return int(round(float(usdc) * 1_000_000))
 
 
-def transfer_message(slot_id: Any, from_wallet: Any, to_wallet: Any, index: int, sale_price_usdc: Any) -> str:
+def transfer_message(slot_id: Any, from_wallet: Any, to_wallet: Any, index: int, sale_price_usdc: Any,
+                     valid_until_block: Any) -> str:
     return (f"{TRANSFER_MESSAGE_PREFIX}{str(slot_id).lower()}|{str(from_wallet).lower()}|"
-            f"{str(to_wallet).lower()}|{int(index)}|{price_micro(sale_price_usdc)}")
+            f"{str(to_wallet).lower()}|{int(index)}|{price_micro(sale_price_usdc)}|{int(valid_until_block)}")
 
 
 def sign_transfer(slot_id: str, from_wallet: str, to_wallet: str, index: int, sale_price_usdc: Any,
-                  private_key: str) -> str:
-    """The seller's release signature (never logs the key)."""
+                  valid_until_block: int, private_key: str) -> str:
+    """The seller's offer/release signature (never logs the key)."""
     from eth_account import Account
     from eth_account.messages import encode_defunct
-    message = transfer_message(slot_id, from_wallet, to_wallet, index, sale_price_usdc)
+    message = transfer_message(slot_id, from_wallet, to_wallet, index, sale_price_usdc, valid_until_block)
     signed = Account.sign_message(encode_defunct(text=message), private_key=private_key)
     sig = signed.signature.hex()
     return sig if sig.startswith("0x") else "0x" + sig
 
 
 def verify_transfer_release(slot_id: str, from_wallet: str, to_wallet: str, index: int,
-                            sale_price_usdc: Any, signature: Any) -> str:
+                            sale_price_usdc: Any, valid_until_block: Any, signature: Any) -> str:
     if not signature:
         raise ValueError(
             "transfer_signature is missing: the outgoing owner releases the block by signing "
-            "thefirstwall.ai|transfer|<slot_id>|<from_wallet>|<to_wallet>|<n>|<price_micro_usdc> "
-            "(scripts/sign_transfer.py)."
+            "thefirstwall.ai|transfer|<slot_id>|<from_wallet>|<to_wallet>|<n>|<price_micro_usdc>|"
+            "<valid_until_block> (scripts/sign_transfer.py)."
         )
     if sale_price_usdc is None:
         raise ValueError("sale_price_usdc is missing: the release names the price (0 for a gift).")
-    signer = recover_signer(transfer_message(slot_id, from_wallet, to_wallet, index, sale_price_usdc), signature)
+    try:
+        deadline = int(valid_until_block)
+    except (TypeError, ValueError):
+        raise ValueError("offer_valid_until_block is missing: the release names the last Base block "
+                         "in which the payment may be mined.")
+    if deadline <= 0:
+        raise ValueError("offer_valid_until_block must be a positive Base block number.")
+    signer = recover_signer(transfer_message(slot_id, from_wallet, to_wallet, index, sale_price_usdc, deadline),
+                            signature)
     if signer.lower() != str(from_wallet).lower():
         raise ValueError(
             f"transfer_signature was made by {signer}, not by the outgoing owner {from_wallet}; "
             "the block was not released."
         )
-    return f"released by {signer} for {float(sale_price_usdc):.2f} USDC"
+    return f"released by {signer} for {float(sale_price_usdc):.2f} USDC (offer valid until block {deadline})"
 
 
 def verify_lineage_chain(dossier: Dict[str, Any]) -> str:
@@ -198,10 +212,28 @@ def verify_lineage_chain(dossier: Dict[str, Any]) -> str:
             else dossier.get("wallet_address")
         try:
             verify_transfer_release(slot_id, entry.get("wallet_address", ""), to, i,
-                                    entry.get("sale_price_usdc"), entry.get("transfer_signature"))
+                                    entry.get("sale_price_usdc"), entry.get("offer_valid_until_block"),
+                                    entry.get("transfer_signature"))
         except ValueError as e:
             raise ValueError(f"ownership_lineage[{i}]: {e}")
     return f"{len(lineage)} transfer(s), each released by its outgoing owner" if lineage else "no transfers"
+
+
+def check_offer(dossier: Dict[str, Any], to_wallet: str, sale_price_usdc: Any, valid_until_block: Any,
+                signature: Any, head_block: Optional[int] = None) -> str:
+    """The buyer's check BEFORE paying: the offer is signed by the block's
+    current owner as main shows it, for this buyer, at this price, with the
+    index the next lineage entry takes, the block is not retired, and the
+    deadline has not passed (when the chain head is known)."""
+    if dossier.get("status") == "RETIRED":
+        raise ValueError("the block is RETIRED; its books are closed and it does not change hands.")
+    slot_id = str(dossier.get("slot_id", ""))
+    owner = str(dossier.get("wallet_address", ""))
+    index = len(dossier.get("ownership_lineage") or [])
+    detail = verify_transfer_release(slot_id, owner, to_wallet, index, sale_price_usdc, valid_until_block, signature)
+    if head_block is not None and int(valid_until_block) < int(head_block):
+        raise ValueError(f"the offer expired at block {int(valid_until_block)}; the chain is at {int(head_block)}.")
+    return f"offer for {slot_id} to {to_wallet}: {detail}"
 
 
 # --- Claim files ---------------------------------------------------------------

@@ -87,10 +87,12 @@ INVARIANTS = [
                    "wallet_address, soul_hash, base_tx_hash), the sale price, the buyer's payment to the "
                    "seller (transfer_tx_hash, proven on Base for at least that price) and the release: "
                    "transfer_signature, an EIP-191 personal_sign by the outgoing wallet over "
-                   "'thefirstwall.ai|transfer|<slot_id>|<from_wallet>|<to_wallet>|<n>|<price_micro_usdc>' "
-                   "(n = the entry's index). Both are required: a payment alone is not consent, a signature "
-                   "alone does not say what was paid. Every entry on record must have released the block to "
-                   "the owner that followed it. A RETIRED block does not change hands.",
+                   "'thefirstwall.ai|transfer|<slot_id>|<from_wallet>|<to_wallet>|<n>|<price_micro_usdc>|"
+                   "<valid_until_block>' (n = the entry's index; the payment must be mined by the deadline). "
+                   "Both are required: a payment alone is not consent, a signature alone does not say what "
+                   "was paid. The offer goes first and is inert without the payment it names, so neither side "
+                   "trusts the other. Every entry on record must have released the block to the owner that "
+                   "followed it. A RETIRED block does not change hands.",
         "enforced_by": "scripts/verifier.py::verify_ownership_lineage + scripts/claims.py::verify_lineage_chain",
     },
     {
@@ -263,16 +265,22 @@ UPDATE_FLOW = [
 ]
 
 TRANSFER_FLOW = [
-    {"step": 1, "action": "settle_between_yourselves",
-     "detail": "Seller and buyer agree a price. The buyer pays it to the seller's wallet_address in USDC on "
-               "Base, from the buyer's own wallet; that transaction hash becomes transfer_tx_hash. The ledger "
-               "is no party to the sale and holds nothing; it only proves on chain that the payment matches "
-               "the signed price. A RETIRED block does not change hands."},
-    {"step": 2, "action": "release",
-     "detail": "Once paid, the seller signs 'thefirstwall.ai|transfer|<slot_id>|<seller_wallet>|<buyer_wallet>"
-               "|<n>|<price_micro_usdc>' (n = number of previous owners on record; the price in USDC base "
-               "units) with the seller's wallet, EIP-191 personal_sign (scripts/sign_transfer.py <dossier> "
-               "--to <buyer_wallet> --price <usdc>), and hands the signature to the buyer."},
+    {"step": 1, "action": "offer",
+     "detail": "Seller and buyer agree a price. The SELLER signs first: 'thefirstwall.ai|transfer|<slot_id>|"
+               "<seller_wallet>|<buyer_wallet>|<n>|<price_micro_usdc>|<valid_until_block>' (n = number of "
+               "previous owners on record; the price in USDC base units; the last Base block in which the "
+               "payment may be mined) with the seller's wallet, EIP-191 personal_sign "
+               "(scripts/sign_transfer.py <dossier> --to <buyer_wallet> --price <usdc> [--valid-for <blocks>]), "
+               "and hands the buyer the signature, the price and the deadline. The seller risks nothing: the "
+               "offer moves nothing on its own, names one buyer and one price, cannot be replayed and expires. "
+               "A RETIRED block does not change hands."},
+    {"step": 2, "action": "check_then_pay",
+     "detail": "The BUYER checks the offer against main before paying (scripts/sign_transfer.py --check-offer): "
+               "signed by the current owner, for the buyer's wallet, at the agreed price, with the right n, not "
+               "retired, not expired. Then the buyer pays exactly the price to the seller's wallet_address in "
+               "USDC on Base, from the buyer's own wallet, in ONE transaction, before the deadline; that hash "
+               "becomes transfer_tx_hash. The ledger is no party to the sale and holds nothing; it proves on "
+               "chain that the payment matches the signed offer."},
     {"step": 3, "action": "update_fee",
      "detail": "The buyer pays the ledger the tier's update_price_usdc from the BUYER's wallet to pay_to and "
                "records it as an update_settlements entry of kind 'transfer' (scripts/record_update.py "
@@ -280,10 +288,11 @@ TRANSFER_FLOW = [
     {"step": 4, "action": "submit",
      "detail": "The buyer opens ONE pull request: wallet_address becomes the buyer's; ownership_lineage gains "
                "exactly one entry with the outgoing owner's moniker, wallet_address, soul_hash and "
-               "base_tx_hash as inscribed, acquired_date, relinquished_date, sale_price_usdc, transfer_tx_hash "
-               "and transfer_signature; the buyer may rewrite the content, icon and soul manifest. slot_id, "
-               "base_tx_hash, settlement and claim_signature stay: the first owner's claim remains the "
-               "block's settlement."},
+               "base_tx_hash as inscribed, acquired_date, relinquished_date, sale_price_usdc, transfer_tx_hash, "
+               "offer_valid_until_block and transfer_signature; the buyer may rewrite the content, icon and "
+               "soul manifest. slot_id, base_tx_hash, settlement and claim_signature stay: the first owner's "
+               "claim remains the block's settlement. A payment short of the signed price, from or to another "
+               "wallet, or mined after the deadline is rejected and the seller keeps the block."},
 ]
 
 
@@ -428,20 +437,26 @@ def build_spec() -> dict:
         "transfer": {
             "sale": "between the parties, in USDC on Base; the buyer's payment to the seller "
                     "(ownership_lineage[].transfer_tx_hash) is required and proven on chain for at least "
-                    "the signed sale_price_usdc; the ledger holds nothing",
+                    "the signed sale_price_usdc, mined no later than offer_valid_until_block; the ledger "
+                    "holds nothing",
+            "order": "the seller signs the offer first (inert on its own); the buyer checks it against main, "
+                     "then pays; the buyer opens the pull request with offer and payment; neither side has to "
+                     "trust the other",
             "release": {
                 "field": "ownership_lineage[].transfer_signature",
                 "scheme": "EIP-191 personal_sign (eth_sign prefix), secp256k1, 65 bytes r||s||v as 0x-hex",
-                "message": claims.TRANSFER_MESSAGE_PREFIX + "<slot_id>|<from_wallet>|<to_wallet>|<n>|<price_micro_usdc>",
+                "message": claims.TRANSFER_MESSAGE_PREFIX
+                           + "<slot_id>|<from_wallet>|<to_wallet>|<n>|<price_micro_usdc>|<valid_until_block>",
                 "message_case": "slot_id and wallets lower-case; n = the entry's index (number of previous "
                                 "owners on record); price_micro_usdc = sale_price_usdc in USDC base units "
-                                "(6 decimals; 0 for a gift)",
+                                "(6 decimals; 0 for a gift); valid_until_block = offer_valid_until_block, the "
+                                "last Base block in which the payment may be mined",
                 "signer": "the outgoing owner's wallet_address",
-                "tool": "scripts/sign_transfer.py",
+                "tool": "scripts/sign_transfer.py (--check-offer for the buyer, --verify for the chain)",
             },
             "lineage_entry": "moniker, wallet_address, soul_hash, base_tx_hash of the outgoing owner as "
                              "inscribed; acquired_date; relinquished_date; sale_price_usdc; transfer_tx_hash; "
-                             "transfer_signature; optional creature, manifesto",
+                             "offer_valid_until_block; transfer_signature; optional creature, manifesto",
             "kept": "slot_id, base_tx_hash, settlement and claim_signature (the first owner's)",
             "retired_blocks": "a RETIRED block does not change hands (owner ruling pending)",
         },

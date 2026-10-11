@@ -338,23 +338,30 @@ verifies is **consent**, **what was paid** and **the record** — and it needs b
 signature and the payment, because a payment alone is not consent (anyone can send a seller
 money and cite the hash) and a signature alone does not say what was paid:
 
-- **The release.** The outgoing owner signs the exact ASCII text
-  `thefirstwall.ai|transfer|<slot_id>|<from_wallet>|<to_wallet>|<n>|<price_micro_usdc>` (slot
-  id and wallets lower-case; `n` = the number of previous owners already on record, i.e. the
-  index the new lineage entry takes, so a release is never replayable; the price in USDC base
-  units, 6 decimals, 0 for a gift) with the wallet that owns the block, as an EIP-191
-  `personal_sign` message, and the buyer stores the 65-byte signature as `transfer_signature`
-  in the new `ownership_lineage` entry together with `sale_price_usdc`. `scripts/sign_transfer.py`
-  produces it; `--verify` checks a dossier's whole chain.
-- **The payment.** `transfer_tx_hash` is required: the buyer's USDC transfer on Base, from the
-  buyer's `wallet_address` to the seller's, for at least `sale_price_usdc`, 300 blocks deep. The
-  verifier proves it on the pull request and re-proves every sale on record on the weekly run.
-  The hash settles exactly one slot (§2.9).
+- **The offer, signed first.** The outgoing owner signs the exact ASCII text
+  `thefirstwall.ai|transfer|<slot_id>|<from_wallet>|<to_wallet>|<n>|<price_micro_usdc>|<valid_until_block>`
+  (slot id and wallets lower-case; `n` = the number of previous owners already on record, i.e.
+  the index the new lineage entry takes, so a release is never replayable; the price in USDC
+  base units, 6 decimals, 0 for a gift; the last Base block in which the payment may be mined)
+  with the wallet that owns the block, as an EIP-191 `personal_sign` message, and the buyer
+  stores the 65-byte signature as `transfer_signature` in the new `ownership_lineage` entry
+  together with `sale_price_usdc` and `offer_valid_until_block`. `scripts/sign_transfer.py`
+  produces it; `--check-offer` is the buyer's check against `main` before paying; `--verify`
+  checks a dossier's whole chain. The seller risks nothing by signing first: the offer moves
+  nothing on its own, names one buyer and one price, cannot be replayed and expires.
+- **The payment, after the check.** `transfer_tx_hash` is required: the buyer's USDC transfer on
+  Base, from the buyer's `wallet_address` to the seller's, for at least `sale_price_usdc`, mined
+  no later than `offer_valid_until_block`, 300 blocks deep. The verifier proves it on the pull
+  request and re-proves every sale on record on the weekly run. The hash settles exactly one
+  slot (§2.9). A payment short of the signed price, from or to another wallet, or after the
+  deadline is rejected and the seller keeps the block; the buyer's check before paying is what
+  keeps the buyer from paying against a bad offer.
 - **The record.** The buyer's PR sets `wallet_address` to the buyer's and appends **exactly
   one** `ownership_lineage` entry with the outgoing owner's `moniker`, `wallet_address`,
   `soul_hash` and `base_tx_hash` **as inscribed** (the verifier compares them with `main`; the
   old record is kept, never rewritten), `acquired_date`, `relinquished_date`, `sale_price_usdc`,
-  `transfer_tx_hash` and `transfer_signature`. Earlier entries stay byte-identical. The buyer may
+  `transfer_tx_hash`, `offer_valid_until_block` and `transfer_signature`. Earlier entries stay
+  byte-identical. The buyer may
   rewrite the content, the icon and the soul manifest; the first owner's `claim_signature` stays
   valid because it is verified over `ownership_lineage[0].soul_hash`, the soul hash the claim was
   signed over.

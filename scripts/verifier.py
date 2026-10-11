@@ -410,9 +410,10 @@ def verify_ownership_lineage(slot_id: str, new_data: dict, ledger_dir: str,
     * ownership_lineage grows by exactly ONE entry, earlier entries byte-identical;
     * the new entry records the outgoing owner as inscribed — wallet_address,
       moniker, soul_hash and base_tx_hash equal what main says;
-    * transfer_signature is the outgoing owner's release: EIP-191 over
-      thefirstwall.ai|transfer|<slot_id>|<from>|<to>|<n>|<price_micro_usdc>,
-      n = the entry's index — consent and price in one signature;
+    * transfer_signature is the outgoing owner's offer and release: EIP-191
+      over thefirstwall.ai|transfer|<slot_id>|<from>|<to>|<n>|<price_micro_usdc>|
+      <valid_until_block>, n = the entry's index — consent, price and
+      deadline in one signature;
     * a retired block is not transferable (its books are closed);
     * transfer_tx_hash is present: the buyer's USDC payment to the seller on
       Base for at least the signed price, proven by verify_sale_on_chain.
@@ -473,7 +474,8 @@ def verify_ownership_lineage(slot_id: str, new_data: dict, ledger_dir: str,
         )
     index = len(prev_lineage)
     release = claims.verify_transfer_release(slot_id, prev_wallet, new_wallet, index,
-                                             entry.get("sale_price_usdc"), entry.get("transfer_signature"))
+                                             entry.get("sale_price_usdc"), entry.get("offer_valid_until_block"),
+                                             entry.get("transfer_signature"))
     print(f"  [✓] Ownership lineage verified: {prev_data.get('moniker')} -> {new_data.get('moniker')} ({release}).")
     return f"transfer #{index + 1}: {release}"
 
@@ -1340,8 +1342,14 @@ def verify_sale_on_chain(entry: dict, buyer_wallet: str, *, rpc: RpcFn = rpc_cal
         raise ValueError("transfer_tx_hash is required: the buyer's payment to the seller on Base.")
     r = verify_base_tx(str(tx), buyer_wallet, str(entry.get("wallet_address", "")), price,
                        rpc=rpc, head_block=head_block)
+    deadline = int(entry.get("offer_valid_until_block", 0))
+    if r["block_number"] > deadline:
+        raise ValueError(
+            f"the payment was mined in block {r['block_number']}, after the offer expired at block {deadline}; "
+            "the seller's offer did not cover it."
+        )
     return (f"sale of {price:.2f} USDC proven on Base: {r['amount_usdc']:.2f} USDC from the buyer to the "
-            f"seller, block {r['block_number']}, {r['confirmations']} confirmations")
+            f"seller, block {r['block_number']} (offer valid until {deadline}), {r['confirmations']} confirmations")
 
 
 def verify_settlement_record(dossier: dict, chain: Dict[str, Any]) -> None:

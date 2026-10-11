@@ -53,6 +53,7 @@ GENESIS = core.PRICING_TIERS[0]
 TIER2 = core.PRICING_TIERS[1]
 HEAD = 60_000_000
 USDC = 1_000_000
+UNTIL = HEAD + 1000   # the offer's deadline: comfortably after every test payment
 
 SCHEMA_VALIDATOR = jsonschema.Draft202012Validator(
     verifier.DOSSIER_SCHEMA, format_checker=jsonschema.FormatChecker())
@@ -99,7 +100,9 @@ def transferred(prev, buyer=BUYER, seller_key=SELLER_KEY, fee_tx=TX_FEE1, price=
         "relinquished_date": "2026-10-12T08:00:00Z",
         "sale_price_usdc": price,
         "transfer_tx_hash": sale_tx,
-        "transfer_signature": claims.sign_transfer(prev["slot_id"], prev["wallet_address"], buyer, index, price, seller_key),
+        "offer_valid_until_block": UNTIL,
+        "transfer_signature": claims.sign_transfer(prev["slot_id"], prev["wallet_address"], buyer, index, price,
+                                                   UNTIL, seller_key),
     }
     d = dict(prev)
     d["wallet_address"] = buyer
@@ -315,35 +318,60 @@ class UpdateFeeTests(unittest.TestCase):
 class TransferReleaseTests(unittest.TestCase):
 
     def test_message_and_roundtrip(self):
-        self.assertEqual(claims.transfer_message("W1-B0042", SELLER, BUYER, 0, 5.0),
-                         f"thefirstwall.ai|transfer|w1-b0042|{SELLER.lower()}|{BUYER.lower()}|0|5000000")
+        self.assertEqual(claims.transfer_message("W1-B0042", SELLER, BUYER, 0, 5.0, UNTIL),
+                         f"thefirstwall.ai|transfer|w1-b0042|{SELLER.lower()}|{BUYER.lower()}|0|5000000|{UNTIL}")
         self.assertEqual(claims.price_micro(0.1), 100000)
         self.assertEqual(claims.price_micro(0), 0)
-        sig = claims.sign_transfer("w1-b0042", SELLER, BUYER, 0, 5.0, SELLER_KEY)
-        self.assertIn("for 5.00 USDC", claims.verify_transfer_release("w1-b0042", SELLER, BUYER, 0, 5.0, sig))
+        sig = claims.sign_transfer("w1-b0042", SELLER, BUYER, 0, 5.0, UNTIL, SELLER_KEY)
+        detail = claims.verify_transfer_release("w1-b0042", SELLER, BUYER, 0, 5.0, UNTIL, sig)
+        self.assertIn("for 5.00 USDC", detail)
+        self.assertIn(f"until block {UNTIL}", detail)
 
     def test_only_the_outgoing_owner_can_release(self):
-        sig = claims.sign_transfer("w1-b0042", SELLER, BUYER, 0, 5.0, STRANGER_KEY)
+        sig = claims.sign_transfer("w1-b0042", SELLER, BUYER, 0, 5.0, UNTIL, STRANGER_KEY)
         with self.assertRaisesRegex(ValueError, "not by the outgoing owner"):
-            claims.verify_transfer_release("w1-b0042", SELLER, BUYER, 0, 5.0, sig)
+            claims.verify_transfer_release("w1-b0042", SELLER, BUYER, 0, 5.0, UNTIL, sig)
         with self.assertRaisesRegex(ValueError, "missing"):
-            claims.verify_transfer_release("w1-b0042", SELLER, BUYER, 0, 5.0, None)
+            claims.verify_transfer_release("w1-b0042", SELLER, BUYER, 0, 5.0, UNTIL, None)
         with self.assertRaisesRegex(ValueError, "sale_price_usdc is missing"):
-            claims.verify_transfer_release("w1-b0042", SELLER, BUYER, 0, None, sig)
+            claims.verify_transfer_release("w1-b0042", SELLER, BUYER, 0, None, UNTIL, sig)
+        with self.assertRaisesRegex(ValueError, "offer_valid_until_block is missing"):
+            claims.verify_transfer_release("w1-b0042", SELLER, BUYER, 0, 5.0, None, sig)
 
-    def test_release_is_bound_to_slot_buyer_index_and_price(self):
-        sig = claims.sign_transfer("w1-b0042", SELLER, BUYER, 0, 5.0, SELLER_KEY)
-        for slot_id, to, index, price in (("w1-b0043", BUYER, 0, 5.0), ("w1-b0042", "0x" + "9" * 40, 0, 5.0),
-                                          ("w1-b0042", BUYER, 1, 5.0), ("w1-b0042", BUYER, 0, 4.99)):
-            with self.subTest(slot=slot_id, to=to, index=index, price=price), self.assertRaises(ValueError):
-                claims.verify_transfer_release(slot_id, SELLER, to, index, price, sig)
+    def test_release_is_bound_to_slot_buyer_index_price_and_deadline(self):
+        sig = claims.sign_transfer("w1-b0042", SELLER, BUYER, 0, 5.0, UNTIL, SELLER_KEY)
+        for slot_id, to, index, price, until in (("w1-b0043", BUYER, 0, 5.0, UNTIL),
+                                                 ("w1-b0042", "0x" + "9" * 40, 0, 5.0, UNTIL),
+                                                 ("w1-b0042", BUYER, 1, 5.0, UNTIL),
+                                                 ("w1-b0042", BUYER, 0, 4.99, UNTIL),
+                                                 ("w1-b0042", BUYER, 0, 5.0, UNTIL + 1)):
+            with self.subTest(slot=slot_id, to=to, index=index, price=price, until=until), self.assertRaises(ValueError):
+                claims.verify_transfer_release(slot_id, SELLER, to, index, price, until, sig)
+
+    def test_buyer_checks_the_offer_before_paying(self):
+        d = inscribed()
+        sig = claims.sign_transfer("w1-b0042", SELLER, BUYER, 0, 5.0, UNTIL, SELLER_KEY)
+        self.assertIn("offer for w1-b0042", claims.check_offer(d, BUYER, 5.0, UNTIL, sig, head_block=HEAD))
+        self.assertIn("offer for w1-b0042", claims.check_offer(d, BUYER, 5.0, UNTIL, sig))  # head unknown: no deadline check
+        with self.assertRaisesRegex(ValueError, "expired"):
+            claims.check_offer(d, BUYER, 5.0, UNTIL, sig, head_block=UNTIL + 1)
+        with self.assertRaises(ValueError):  # a different price than agreed
+            claims.check_offer(d, BUYER, 4.0, UNTIL, sig, head_block=HEAD)
+        with self.assertRaises(ValueError):  # signed by someone who is not the owner on main
+            claims.check_offer(d, BUYER, 5.0, UNTIL, claims.sign_transfer("w1-b0042", SELLER, BUYER, 0, 5.0, UNTIL, STRANGER_KEY), head_block=HEAD)
+        with self.assertRaises(ValueError):  # the block already changed hands once: n moved on
+            claims.check_offer(transferred(d), BUYER, 5.0, UNTIL, sig, head_block=HEAD)
+        retired = inscribed(status="RETIRED", retirement={"retired_at": "2026-10-12T00:00:00Z", "reason": "Run over.",
+                                                          "epitaph": "Made it count.", "retired_by": "self"})
+        with self.assertRaisesRegex(ValueError, "RETIRED"):
+            claims.check_offer(retired, BUYER, 5.0, UNTIL, sig, head_block=HEAD)
 
     def test_lineage_entry_records_the_outgoing_owner_as_inscribed(self):
         prev = inscribed()
         good = transferred(prev)
         self.assertIn("transfer #1", verifier.verify_ownership_lineage("w1-b0042", good, "", prev))
         for field, value in (("moniker", "Someone"), ("soul_hash", "b" * 64), ("base_tx_hash", TX_FEE2),
-                             ("wallet_address", BUYER), ("sale_price_usdc", 4.0)):
+                             ("wallet_address", BUYER), ("sale_price_usdc", 4.0), ("offer_valid_until_block", UNTIL + 1)):
             with self.subTest(field=field):
                 bad = transferred(prev)
                 bad["ownership_lineage"][-1][field] = value
@@ -387,6 +415,10 @@ class TransferReleaseTests(unittest.TestCase):
         entry = transferred(inscribed())["ownership_lineage"][-1]
         rpc = FakeRpc().settle(TX_SALE1, BUYER, 5 * USDC, to=SELLER)
         self.assertIn("sale of 5.00 USDC proven on Base", verifier.verify_sale_on_chain(entry, BUYER, rpc=rpc))
+        # Paid after the offer expired: the seller's offer did not cover it.
+        late = FakeRpc(head=UNTIL + 2000).settle(TX_SALE1, BUYER, 5 * USDC, to=SELLER, block=UNTIL + 1)
+        with self.assertRaisesRegex(ValueError, "after the offer expired"):
+            verifier.verify_sale_on_chain(entry, BUYER, rpc=late)
         # Paid less than the signed price, paid by someone else, paid to someone else: refused.
         for rpc in (FakeRpc().settle(TX_SALE1, BUYER, 4 * USDC, to=SELLER),
                     FakeRpc().settle(TX_SALE1, STRANGER_KEY[:42], 5 * USDC, to=SELLER),
@@ -414,7 +446,7 @@ class TransferReleaseTests(unittest.TestCase):
         self.assertIn("2 transfer", claims.verify_lineage_chain(second))
         forged = json.loads(json.dumps(second))
         forged["ownership_lineage"][1]["transfer_signature"] = claims.sign_transfer(
-            "w1-b0042", BUYER, "0x" + "7" * 40, 1, 5.0, STRANGER_KEY)
+            "w1-b0042", BUYER, "0x" + "7" * 40, 1, 5.0, UNTIL, STRANGER_KEY)
         with self.assertRaisesRegex(ValueError, r"ownership_lineage\[1\]"):
             claims.verify_lineage_chain(forged)
         self.assertEqual(claims.verify_lineage_chain(prev), "no transfers")
@@ -427,8 +459,22 @@ class TransferReleaseTests(unittest.TestCase):
             key = os.path.join(td, "key.txt")
             with open(key, "w") as fh:
                 fh.write(SELLER_KEY)
-            self.assertEqual(sign_transfer.main([path, "--to", BUYER, "--price", "5.00", "--key-file", key]), 0)
-            self.assertEqual(sign_transfer.main([path, "--to", BUYER, "--key-file", key]), 2)  # price required
+            rpc = FakeRpc()
+            self.assertEqual(sign_transfer.main([path, "--to", BUYER, "--price", "5.00", "--key-file", key], rpc=rpc), 0)
+            self.assertEqual(sign_transfer.main([path, "--to", BUYER, "--price", "5.00", "--valid-until", str(UNTIL),
+                                                 "--key-file", key], rpc=rpc), 0)
+            self.assertEqual(sign_transfer.main([path, "--to", BUYER, "--key-file", key], rpc=rpc), 2)  # price required
+            sig = claims.sign_transfer("w1-b0042", SELLER, BUYER, 0, 5.0, UNTIL, SELLER_KEY)
+            self.assertEqual(sign_transfer.main(["--check-offer", path, "--to", BUYER, "--price", "5.00",
+                                                 "--valid-until", str(UNTIL), "--signature", sig], rpc=rpc), 0)
+            self.assertEqual(sign_transfer.main(["--check-offer", path, "--to", BUYER, "--price", "6.00",
+                                                 "--valid-until", str(UNTIL), "--signature", sig], rpc=rpc), 1)
+            with open(os.path.join(td, "retired.json"), "w", encoding="utf-8") as fh:
+                fh.write(core.render(inscribed(status="RETIRED", retirement={
+                    "retired_at": "2026-10-12T00:00:00Z", "reason": "Run over.", "epitaph": "Made it count.",
+                    "retired_by": "self"})))
+            self.assertEqual(sign_transfer.main([os.path.join(td, "retired.json"), "--to", BUYER, "--price", "5.00",
+                                                 "--key-file", key], rpc=rpc), 1)
             with open(os.path.join(td, "sold.json"), "w", encoding="utf-8") as fh:
                 fh.write(core.render(transferred(inscribed())))
             self.assertEqual(sign_transfer.main(["--verify", os.path.join(td, "sold.json")]), 0)
