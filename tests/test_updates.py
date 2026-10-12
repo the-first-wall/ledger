@@ -57,7 +57,10 @@ SCHEMA_VALIDATOR = jsonschema.Draft202012Validator(
     verifier.DOSSIER_SCHEMA, format_checker=jsonschema.FormatChecker())
 
 
-def fee(tx=TX_FEE1, wallet=SELLER, amount=1.0, kind="update", at="2026-10-12T09:00:00Z"):
+def fee(tx=TX_FEE1, wallet=SELLER, amount=None, kind="update", at="2026-10-12T09:00:00Z"):
+    """A fee record: the flat price of its kind (0.50 update, 5.00 transfer) unless told otherwise."""
+    if amount is None:
+        amount = core.FEE_PRICES_USDC.get(kind, 0.5)
     return {"tx_hash": tx, "wallet_address": wallet, "amount_usdc": amount, "kind": kind, "at": at}
 
 
@@ -153,9 +156,24 @@ def failing(report):
 
 class LadderTests(unittest.TestCase):
 
-    def test_update_price_is_flat(self):
-        self.assertEqual(core.UPDATE_PRICE_USDC, 1.0)
-        self.assertEqual(core.build_state(REPO)[0]["update_price_usdc"], 1.0)
+    def test_fees_are_flat_and_published(self):
+        self.assertEqual(core.UPDATE_PRICE_USDC, 0.5)
+        self.assertEqual(core.TRANSFER_PRICE_USDC, 5.0)
+        self.assertEqual(core.fee_price("update"), 0.5)
+        self.assertEqual(core.fee_price("transfer"), 5.0)
+        with self.assertRaisesRegex(ValueError, "unknown fee kind"):
+            core.fee_price("gift")
+        state = core.build_state(REPO)[0]
+        self.assertEqual(state["update_price_usdc"], 0.5)
+        self.assertEqual(state["transfer_price_usdc"], 5.0)
+        self.assertFalse(state["transfers_open"])
+        self.assertEqual(state["unsold_slots"], core.unsold_slots_in(REPO))
+        self.assertGreater(state["unsold_slots"], 9000)
+        # Transfers open only once every public block is sold; reserved blocks do not count.
+        self.assertEqual(core.unsold_slots(set()), 10000 - len(core.RESERVED_SLOT_NUMBERS))
+        self.assertEqual(core.unsold_slots(set(range(1, 10001))), 0)
+        self.assertEqual(core.unsold_slots(set(range(1, 10001)) - set(core.RESERVED_SLOT_NUMBERS)), 0)
+        self.assertEqual(core.unsold_slots(set(range(1, 10000))), 1)
         # The wall's tier is that of the next free public block.
         self.assertEqual(core.next_available_number(set()), 1)
         self.assertEqual(core.next_available_number({1}), 11)
@@ -173,7 +191,10 @@ class LadderTests(unittest.TestCase):
         with open(os.path.join(REPO, "spec.json"), encoding="utf-8") as fh:
             spec = json.load(fh)
         self.assertEqual(spec["pricing_tiers"], tiers)
-        self.assertEqual(spec["update_fee"]["amount_usdc"], 1.0)
+        self.assertEqual(spec["update_fee"]["amount_usdc"], 0.5)
+        self.assertEqual(spec["transfer_fee"]["amount_usdc"], 5.0)
+        self.assertIn("once every public block is sold", spec["transfer"]["when"])
+        self.assertIn("forever", spec["transfer"]["previous_owners"])
         self.assertIn("update_flow", spec)
         self.assertIn("transfer_flow", spec)
 
@@ -217,7 +238,7 @@ class UpdateFeeTests(unittest.TestCase):
     def test_a_change_without_a_fee_is_refused(self):
         prev = inscribed()
         new = dict(prev, agent_urls={"home": "https://example.com"})
-        with self.assertRaisesRegex(ValueError, "settles an update fee of 1.00 USDC"):
+        with self.assertRaisesRegex(ValueError, "settles an update fee of 0.50 USDC"):
             verifier.verify_update_settlements("w1-b0042", new, prev, True)
         # Untouched by this PR: nothing owed.
         self.assertIn("no updates yet", verifier.verify_update_settlements("w1-b0042", prev, prev, False))
@@ -225,7 +246,7 @@ class UpdateFeeTests(unittest.TestCase):
     def test_one_update_one_fee(self):
         prev = inscribed()
         ok = dict(prev, update_settlements=[fee()])
-        self.assertIn("update fee 1.00 USDC", verifier.verify_update_settlements("w1-b0042", ok, prev, True))
+        self.assertIn("update fee 0.50 USDC", verifier.verify_update_settlements("w1-b0042", ok, prev, True))
         two = dict(prev, update_settlements=[fee(), fee(tx=TX_FEE2)])
         with self.assertRaisesRegex(ValueError, "one update, one fee"):
             verifier.verify_update_settlements("w1-b0042", two, prev, True)
@@ -237,14 +258,30 @@ class UpdateFeeTests(unittest.TestCase):
         prev = inscribed()
         with self.assertRaisesRegex(ValueError, "paid by the block's owner"):
             verifier.verify_update_settlements("w1-b0042", dict(prev, update_settlements=[fee(wallet=BUYER)]), prev, True)
-        with self.assertRaisesRegex(ValueError, "every update owes 1.00 USDC"):
-            verifier.verify_update_settlements("w1-b0042", dict(prev, update_settlements=[fee(amount=0.5)]), prev, True)
+        with self.assertRaisesRegex(ValueError, "an update owes 0.50 USDC"):
+            verifier.verify_update_settlements("w1-b0042", dict(prev, update_settlements=[fee(amount=0.25)]), prev, True)
         # The same flat fee for a tier-2 block.
         prev2 = inscribed(slot_id="w1-b0600", icon_rel_path="assets/w1-b0600.webp")
-        self.assertIn("update fee 1.00 USDC (owed 1.00 USDC)", verifier.verify_update_settlements(
-            "w1-b0600", dict(prev2, update_settlements=[fee(amount=1.0)]), prev2, True))
+        self.assertIn("update fee 0.50 USDC (owed 0.50 USDC)", verifier.verify_update_settlements(
+            "w1-b0600", dict(prev2, update_settlements=[fee(amount=0.5)]), prev2, True))
         self.assertIn("update fee 7.00", verifier.verify_update_settlements(
             "w1-b0042", dict(prev, update_settlements=[fee(amount=7.0)]), prev, True))  # overpaid, fine
+
+    def test_a_transfer_owes_the_transfer_fee_not_the_update_fee(self):
+        prev = inscribed()
+        sold = transferred(prev)
+        self.assertIn("transfer fee 5.00 USDC (owed 5.00 USDC)",
+                      verifier.verify_update_settlements("w1-b0042", sold, prev, True))
+        cheap = transferred(prev)
+        cheap["update_settlements"][-1]["amount_usdc"] = 1.0  # the old update fee does not cover a transfer
+        with self.assertRaisesRegex(ValueError, "a transfer owes 5.00 USDC"):
+            verifier.verify_update_settlements("w1-b0042", cheap, prev, True)
+        unpaid = transferred(prev)
+        unpaid["update_settlements"] = []
+        with self.assertRaisesRegex(ValueError, "settles a transfer fee of 5.00 USDC"):
+            verifier.verify_update_settlements("w1-b0042", unpaid, prev, True)
+        with self.assertRaisesRegex(ValueError, "unknown fee kind"):
+            verifier.verify_update_settlements("w1-b0042", dict(prev, update_settlements=[fee(kind="gift")]), prev, True)
 
     def test_kind_matches_the_change(self):
         prev = inscribed()
@@ -263,32 +300,46 @@ class UpdateFeeTests(unittest.TestCase):
             verifier.verify_append_only("w1-b0042", dict(prev, update_settlements=[]), prev)
 
     def test_fee_is_proven_on_chain(self):
-        rpc = FakeRpc().settle(TX_FEE1, SELLER, USDC)
-        self.assertIn("1.00 USDC", verifier.verify_update_fee_on_chain("w1-b0042", fee(), rpc=rpc))
-        with self.assertRaisesRegex(ValueError, "Base says 1.00"):
+        rpc = FakeRpc().settle(TX_FEE1, SELLER, USDC // 2)
+        self.assertIn("0.50 USDC", verifier.verify_update_fee_on_chain("w1-b0042", fee(), rpc=rpc))
+        with self.assertRaisesRegex(ValueError, "Base says 0.50"):
             verifier.verify_update_fee_on_chain("w1-b0042", fee(amount=1.25), rpc=rpc)
-        rpc = FakeRpc().settle(TX_FEE1, SELLER, USDC // 2)  # paid half the flat fee
-        with self.assertRaisesRegex(ValueError, "amount >= 1.0"):
-            verifier.verify_update_fee_on_chain("w1-b0042", fee(amount=0.5), rpc=rpc)
-        rpc = FakeRpc().settle(TX_FEE1, BUYER, USDC)  # someone else paid
+        rpc = FakeRpc().settle(TX_FEE1, SELLER, USDC // 4)  # paid half the update fee
+        with self.assertRaisesRegex(ValueError, "amount >= 0.5"):
+            verifier.verify_update_fee_on_chain("w1-b0042", fee(amount=0.25), rpc=rpc)
+        rpc = FakeRpc().settle(TX_FEE1, BUYER, USDC // 2)  # someone else paid
         with self.assertRaises(ValueError):
             verifier.verify_update_fee_on_chain("w1-b0042", fee(), rpc=rpc)
+        # A transfer fee is 5.00 USDC from the buyer; an update fee's worth does not cover it.
+        rpc = FakeRpc().settle(TX_FEE2, BUYER, 5 * USDC)
+        self.assertIn("5.00 USDC", verifier.verify_update_fee_on_chain(
+            "w1-b0042", fee(tx=TX_FEE2, wallet=BUYER, kind="transfer"), rpc=rpc))
+        rpc = FakeRpc().settle(TX_FEE2, BUYER, USDC)
+        with self.assertRaisesRegex(ValueError, "amount >= 5.0"):
+            verifier.verify_update_fee_on_chain("w1-b0042", fee(tx=TX_FEE2, wallet=BUYER, amount=1.0, kind="transfer"), rpc=rpc)
 
     def test_record_update_tool(self):
         with tempfile.TemporaryDirectory() as td:
             path = os.path.join(td, "w1-b0042.json")
             with open(path, "w", encoding="utf-8") as fh:
                 fh.write(core.render(inscribed()))
-            rpc = FakeRpc().settle(TX_FEE1, SELLER, USDC)
+            rpc = FakeRpc().settle(TX_FEE1, SELLER, USDC // 2)
             self.assertEqual(record_update.main([path, TX_FEE1, "--at", "2026-10-12T09:00:00Z", "--write"], rpc=rpc), 0)
             self.assertEqual(record_update.main([path, TX_FEE1, "--write"], rpc=rpc), 0)  # idempotent
             d = core.load_json_strict(path)
             self.assertEqual(d["update_settlements"], [fee()])
             verifier.validate_dossier(d)
             # Below the update price: refused before anything is written.
-            rpc.settle(TX_FEE2, SELLER, USDC // 2)
+            rpc.settle(TX_FEE2, SELLER, USDC // 4)
             self.assertEqual(record_update.main([path, TX_FEE2, "--write"], rpc=rpc), 1)
             self.assertEqual(len(core.load_json_strict(path)["update_settlements"]), 1)
+            # A transfer fee is 5.00 USDC: an update fee's worth is refused for --kind transfer.
+            tx3 = "0x" + "f3" * 32
+            rpc.settle(tx3, SELLER, 2 * USDC)
+            self.assertEqual(record_update.main([path, tx3, "--kind", "transfer", "--write"], rpc=rpc), 1)
+            rpc.settle(tx3, SELLER, 5 * USDC)
+            self.assertEqual(record_update.main([path, tx3, "--kind", "transfer", "--write"], rpc=rpc), 0)
+            self.assertEqual(core.load_json_strict(path)["update_settlements"][-1]["amount_usdc"], 5.0)
             self.assertEqual(record_update.main(["--price"]), 0)
 
 
@@ -347,50 +398,65 @@ class TransferReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "RETIRED"):
             claims.check_offer(retired, BUYER, 5.0, UNTIL, sig, head_block=HEAD)
 
+    def test_transfers_open_only_once_every_block_is_sold(self):
+        prev = inscribed()
+        sold = transferred(prev)
+        with self.assertRaisesRegex(ValueError, "transfers open once every block is sold; 3 of 10000"):
+            verifier.verify_ownership_lineage("w1-b0042", sold, "", prev, unsold=3)
+        # Read from the ledger when not given: the live ledger is nowhere near sold out.
+        with self.assertRaisesRegex(ValueError, "still unsold"):
+            verifier.verify_ownership_lineage("w1-b0042", sold, core.ledger_w1_dir(REPO), prev)
+        self.assertIn("transfer #1", verifier.verify_ownership_lineage("w1-b0042", sold, "", prev, unsold=0))
+        # The buyer's check says so before any payment.
+        sig = sold["ownership_lineage"][0]["transfer_signature"]
+        with self.assertRaisesRegex(ValueError, "still unsold"):
+            claims.check_offer(prev, BUYER, 5.0, UNTIL, sig, head_block=HEAD, unsold=1)
+        self.assertIn("offer for w1-b0042", claims.check_offer(prev, BUYER, 5.0, UNTIL, sig, head_block=HEAD, unsold=0))
+
     def test_lineage_entry_records_the_outgoing_owner_as_inscribed(self):
         prev = inscribed()
         good = transferred(prev)
-        self.assertIn("transfer #1", verifier.verify_ownership_lineage("w1-b0042", good, "", prev))
+        self.assertIn("transfer #1", verifier.verify_ownership_lineage("w1-b0042", good, "", prev, unsold=0))
         for field, value in (("moniker", "Someone"), ("soul_hash", "b" * 64), ("base_tx_hash", TX_FEE2),
                              ("wallet_address", BUYER), ("sale_price_usdc", 4.0), ("offer_valid_until_block", UNTIL + 1)):
             with self.subTest(field=field):
                 bad = transferred(prev)
                 bad["ownership_lineage"][-1][field] = value
                 with self.assertRaises(ValueError):
-                    verifier.verify_ownership_lineage("w1-b0042", bad, "", prev)
+                    verifier.verify_ownership_lineage("w1-b0042", bad, "", prev, unsold=0)
 
     def test_exactly_one_entry_per_transfer_and_history_intact(self):
         prev = inscribed()
         none = dict(transferred(prev), ownership_lineage=[])
         with self.assertRaisesRegex(ValueError, "MUST preserve"):
-            verifier.verify_ownership_lineage("w1-b0042", none, "", prev)
+            verifier.verify_ownership_lineage("w1-b0042", none, "", prev, unsold=0)
         two = transferred(prev)
         two["ownership_lineage"] = two["ownership_lineage"] * 2
         with self.assertRaisesRegex(ValueError, "exactly one entry"):
-            verifier.verify_ownership_lineage("w1-b0042", two, "", prev)
+            verifier.verify_ownership_lineage("w1-b0042", two, "", prev, unsold=0)
         # Second sale: the first entry stays byte-identical.
         second = transferred(transferred(prev), buyer="0x" + "7" * 40, seller_key=BUYER_KEY, fee_tx=TX_FEE2)
-        self.assertIn("transfer #2", verifier.verify_ownership_lineage("w1-b0042", second, "", transferred(prev)))
+        self.assertIn("transfer #2", verifier.verify_ownership_lineage("w1-b0042", second, "", transferred(prev), unsold=0))
         tampered = json.loads(json.dumps(second))
         tampered["ownership_lineage"][0]["moniker"] = "Rewritten"
         with self.assertRaisesRegex(ValueError, "tampering"):
-            verifier.verify_ownership_lineage("w1-b0042", tampered, "", transferred(prev))
+            verifier.verify_ownership_lineage("w1-b0042", tampered, "", transferred(prev), unsold=0)
 
     def test_payment_and_release_are_both_required(self):
         prev = inscribed()
         d = transferred(prev)
         self.assertTrue(SCHEMA_VALIDATOR.is_valid(d))
         verifier.validate_dossier(d)
-        self.assertIn("transfer #1", verifier.verify_ownership_lineage("w1-b0042", d, "", prev))
+        self.assertIn("transfer #1", verifier.verify_ownership_lineage("w1-b0042", d, "", prev, unsold=0))
         # No payment cited: a release alone does not move the block.
         unpaid = transferred(prev)
         del unpaid["ownership_lineage"][-1]["transfer_tx_hash"]
         self.assertFalse(SCHEMA_VALIDATOR.is_valid(unpaid))
         with self.assertRaisesRegex(ValueError, "transfer_tx_hash is required"):
-            verifier.verify_ownership_lineage("w1-b0042", unpaid, "", prev)
+            verifier.verify_ownership_lineage("w1-b0042", unpaid, "", prev, unsold=0)
         # A gift is a signed price of 0 with a 0 USDC transfer.
         gift = transferred(prev, price=0)
-        self.assertIn("for 0.00 USDC", verifier.verify_ownership_lineage("w1-b0042", gift, "", prev))
+        self.assertIn("for 0.00 USDC", verifier.verify_ownership_lineage("w1-b0042", gift, "", prev, unsold=0))
 
     def test_the_sale_is_proven_on_chain(self):
         entry = transferred(inscribed())["ownership_lineage"][-1]
@@ -413,7 +479,7 @@ class TransferReleaseTests(unittest.TestCase):
         prev = inscribed(status="RETIRED", retirement={"retired_at": "2026-10-12T00:00:00Z", "reason": "Run over.",
                                                        "epitaph": "Made it count.", "retired_by": "self"})
         with self.assertRaisesRegex(ValueError, "RETIRED; its books are closed"):
-            verifier.verify_ownership_lineage("w1-b0042", transferred(prev), "", prev)
+            verifier.verify_ownership_lineage("w1-b0042", transferred(prev), "", prev, unsold=0)
 
     def test_whole_chain_is_checked_and_the_claim_signature_survives(self):
         prev = inscribed()
@@ -441,28 +507,34 @@ class TransferReleaseTests(unittest.TestCase):
             with open(key, "w") as fh:
                 fh.write(SELLER_KEY)
             rpc = FakeRpc()
-            self.assertEqual(sign_transfer.main([path, "--to", BUYER, "--price", "5.00", "--key-file", key], rpc=rpc), 0)
-            self.assertEqual(sign_transfer.main([path, "--to", BUYER, "--price", "5.00", "--valid-until", str(UNTIL),
-                                                 "--key-file", key], rpc=rpc), 0)
-            self.assertEqual(sign_transfer.main([path, "--to", BUYER, "--key-file", key], rpc=rpc), 2)  # price required
-            sig = claims.sign_transfer("w1-b0042", SELLER, BUYER, 0, 5.0, UNTIL, SELLER_KEY)
+            # Closed while blocks are unsold: the live ledger is nowhere near sold out, so nothing is signed.
+            self.assertEqual(sign_transfer.main([path, "--to", BUYER, "--price", "5.00", "--key-file", key], rpc=rpc), 1)
+            sig0 = claims.sign_transfer("w1-b0042", SELLER, BUYER, 0, 5.0, UNTIL, SELLER_KEY)
             self.assertEqual(sign_transfer.main(["--check-offer", path, "--to", BUYER, "--price", "5.00",
-                                                 "--valid-until", str(UNTIL), "--signature", sig], rpc=rpc), 0)
-            self.assertEqual(sign_transfer.main(["--check-offer", path, "--to", BUYER, "--price", "6.00",
-                                                 "--valid-until", str(UNTIL), "--signature", sig], rpc=rpc), 1)
-            with open(os.path.join(td, "retired.json"), "w", encoding="utf-8") as fh:
-                fh.write(core.render(inscribed(status="RETIRED", retirement={
-                    "retired_at": "2026-10-12T00:00:00Z", "reason": "Run over.", "epitaph": "Made it count.",
-                    "retired_by": "self"})))
-            self.assertEqual(sign_transfer.main([os.path.join(td, "retired.json"), "--to", BUYER, "--price", "5.00",
-                                                 "--key-file", key], rpc=rpc), 1)
-            with open(os.path.join(td, "sold.json"), "w", encoding="utf-8") as fh:
-                fh.write(core.render(transferred(inscribed())))
-            self.assertEqual(sign_transfer.main(["--verify", os.path.join(td, "sold.json")]), 0)
-            bad = transferred(inscribed(), seller_key=STRANGER_KEY)
-            with open(os.path.join(td, "bad.json"), "w", encoding="utf-8") as fh:
-                fh.write(core.render(bad))
-            self.assertEqual(sign_transfer.main(["--verify", os.path.join(td, "bad.json")]), 1)
+                                                 "--valid-until", str(UNTIL), "--signature", sig0], rpc=rpc), 1)
+            with mock.patch.object(core, "unsold_slots_in", return_value=0):
+                self.assertEqual(sign_transfer.main([path, "--to", BUYER, "--price", "5.00", "--key-file", key], rpc=rpc), 0)
+                self.assertEqual(sign_transfer.main([path, "--to", BUYER, "--price", "5.00", "--valid-until", str(UNTIL),
+                                                     "--key-file", key], rpc=rpc), 0)
+                self.assertEqual(sign_transfer.main([path, "--to", BUYER, "--key-file", key], rpc=rpc), 2)  # price required
+                sig = claims.sign_transfer("w1-b0042", SELLER, BUYER, 0, 5.0, UNTIL, SELLER_KEY)
+                self.assertEqual(sign_transfer.main(["--check-offer", path, "--to", BUYER, "--price", "5.00",
+                                                     "--valid-until", str(UNTIL), "--signature", sig], rpc=rpc), 0)
+                self.assertEqual(sign_transfer.main(["--check-offer", path, "--to", BUYER, "--price", "6.00",
+                                                     "--valid-until", str(UNTIL), "--signature", sig], rpc=rpc), 1)
+                with open(os.path.join(td, "retired.json"), "w", encoding="utf-8") as fh:
+                    fh.write(core.render(inscribed(status="RETIRED", retirement={
+                        "retired_at": "2026-10-12T00:00:00Z", "reason": "Run over.", "epitaph": "Made it count.",
+                        "retired_by": "self"})))
+                self.assertEqual(sign_transfer.main([os.path.join(td, "retired.json"), "--to", BUYER, "--price", "5.00",
+                                                     "--key-file", key], rpc=rpc), 1)
+                with open(os.path.join(td, "sold.json"), "w", encoding="utf-8") as fh:
+                    fh.write(core.render(transferred(inscribed())))
+                self.assertEqual(sign_transfer.main(["--verify", os.path.join(td, "sold.json")]), 0)
+                bad = transferred(inscribed(), seller_key=STRANGER_KEY)
+                with open(os.path.join(td, "bad.json"), "w", encoding="utf-8") as fh:
+                    fh.write(core.render(bad))
+                self.assertEqual(sign_transfer.main(["--verify", os.path.join(td, "bad.json")]), 1)
 
 
 # --------------------------------------------------------------------------- #
@@ -522,12 +594,13 @@ class UpdateLedgerTests(unittest.TestCase):
         self._generate()
         return d
 
-    def _run(self, prev, rpc=None, touched=True):
+    def _run(self, prev, rpc=None, touched=True, sold_out=True):
         entries = [("M", "ledger/w1/w1-b0042.json"), ("M", "ledger/souls/w1-b0042.soul.json"),
                    ("M", "state.json"), ("M", "ledger/index.json"), ("M", "ledger/settlements.json")]
         base = {"ledger/w1/w1-b0042.json": core.render(prev).encode()}
         with mock.patch.object(verifier, "changed_entries", return_value=entries if touched else None), \
-                mock.patch.object(verifier, "_git_show", side_effect=base.get):
+                mock.patch.object(verifier, "_git_show", side_effect=base.get), \
+                mock.patch.object(core, "unsold_slots_in", return_value=0 if sold_out else 9990):
             if rpc is None:
                 return verifier.run_verification(self.td, skip_rpc=True)
             return verifier.run_verification(self.td, rpc=rpc)
@@ -537,11 +610,11 @@ class UpdateLedgerTests(unittest.TestCase):
         new = dict(prev, agent_urls={"home": "https://example.com"},
                    update_settlements=[fee()])
         self._write(new)
-        rpc = FakeRpc().settle(TX_CLAIM, SELLER, USDC, block=HEAD - 5000).settle(TX_FEE1, SELLER, USDC)
+        rpc = FakeRpc().settle(TX_CLAIM, SELLER, USDC, block=HEAD - 5000).settle(TX_FEE1, SELLER, USDC // 2)
         report = self._run(prev, rpc)
         self.assertEqual(report["result"], "PASS", failing(report))
-        self.assertIn("update fee 1.00", status_of("w1-b0042.update_settlements", report)["detail"])
-        self.assertIn("[0] 1.00 USDC", status_of("w1-b0042.update_fee_base_rpc", report)["detail"])
+        self.assertIn("update fee 0.50", status_of("w1-b0042.update_settlements", report)["detail"])
+        self.assertIn("[0] 0.50 USDC", status_of("w1-b0042.update_fee_base_rpc", report)["detail"])
         # The same change without the fee.
         nofee = dict(prev, agent_urls={"home": "https://example.com"})
         self._write(nofee)
@@ -566,23 +639,23 @@ class UpdateLedgerTests(unittest.TestCase):
         prev = self._inscribe()
         sold = transferred(prev)
         sold = self._write(sold, manifest_text="the buyer's manifest")
-        rpc = (FakeRpc().settle(TX_CLAIM, SELLER, USDC, block=HEAD - 5000).settle(TX_FEE1, BUYER, USDC)
+        rpc = (FakeRpc().settle(TX_CLAIM, SELLER, USDC, block=HEAD - 5000).settle(TX_FEE1, BUYER, 5 * USDC)
                .settle(TX_SALE1, BUYER, 5 * USDC, to=SELLER))
         report = self._run(prev, rpc)
         self.assertEqual(report["result"], "PASS", failing(report))
         self.assertIn("transfer #1", status_of("w1-b0042.ownership_lineage", report)["detail"])
         self.assertIn("1 transfer", status_of("w1-b0042.ownership_chain", report)["detail"])
-        self.assertIn("transfer fee 1.00", status_of("w1-b0042.update_settlements", report)["detail"])
+        self.assertIn("transfer fee 5.00", status_of("w1-b0042.update_settlements", report)["detail"])
         self.assertIn("sale of 5.00 USDC proven", status_of("w1-b0042.sale_base_rpc", report)["detail"])
         self.assertEqual(status_of("w1-b0042.claim_signature", report)["status"], "PASS")
         self.assertEqual(status_of("w1-b0042.append_only", report)["detail"], "transfer: lineage rules apply")
         # The fee must come from the buyer: the seller paying it is refused on chain.
-        rpc = (FakeRpc().settle(TX_CLAIM, SELLER, USDC, block=HEAD - 5000).settle(TX_FEE1, SELLER, USDC)
+        rpc = (FakeRpc().settle(TX_CLAIM, SELLER, USDC, block=HEAD - 5000).settle(TX_FEE1, SELLER, 5 * USDC)
                .settle(TX_SALE1, BUYER, 5 * USDC, to=SELLER))
         report = self._run(prev, rpc)
         self.assertEqual(status_of("w1-b0042.update_fee_base_rpc", report)["status"], "FAIL")
         # The sale must be what the seller signed: 4 USDC on chain for a 5 USDC release is refused.
-        rpc = (FakeRpc().settle(TX_CLAIM, SELLER, USDC, block=HEAD - 5000).settle(TX_FEE1, BUYER, USDC)
+        rpc = (FakeRpc().settle(TX_CLAIM, SELLER, USDC, block=HEAD - 5000).settle(TX_FEE1, BUYER, 5 * USDC)
                .settle(TX_SALE1, BUYER, 4 * USDC, to=SELLER))
         report = self._run(prev, rpc)
         self.assertEqual(status_of("w1-b0042.sale_base_rpc", report)["status"], "FAIL")
@@ -606,16 +679,25 @@ class UpdateLedgerTests(unittest.TestCase):
         unpaid["update_settlements"] = []
         self._write(unpaid)
         report = self._run(prev)
-        self.assertIn("settles an update fee", status_of("w1-b0042.update_settlements", report)["detail"])
+        self.assertIn("settles a transfer fee of 5.00", status_of("w1-b0042.update_settlements", report)["detail"])
+
+    def test_transfer_is_refused_while_blocks_are_unsold(self):
+        prev = self._inscribe()
+        self._write(transferred(prev))
+        report = self._run(prev, sold_out=False)
+        self.assertEqual(report["result"], "FAIL")
+        self.assertIn("transfers open once every block is sold; 9990 of 10000",
+                      status_of("w1-b0042.ownership_lineage", report)["detail"])
 
     def test_history_is_re_proven_on_a_full_run(self):
         prev = self._inscribe()
         sold = self._write(transferred(prev))
-        rpc = (FakeRpc().settle(TX_CLAIM, SELLER, USDC, block=HEAD - 5000).settle(TX_FEE1, BUYER, USDC)
+        rpc = (FakeRpc().settle(TX_CLAIM, SELLER, USDC, block=HEAD - 5000).settle(TX_FEE1, BUYER, 5 * USDC)
                .settle(TX_SALE1, BUYER, 5 * USDC, to=SELLER))
-        report = verifier.run_verification(self.td, rpc=rpc, rpc_scope="all")
+        with mock.patch.object(core, "unsold_slots_in", return_value=0):
+            report = verifier.run_verification(self.td, rpc=rpc, rpc_scope="all")
         self.assertEqual(report["result"], "PASS", failing(report))
-        self.assertIn("[0] 1.00 USDC", status_of("w1-b0042.update_fee_base_rpc", report)["detail"])
+        self.assertIn("[0] 5.00 USDC", status_of("w1-b0042.update_fee_base_rpc", report)["detail"])
         self.assertIn("[0] sale of 5.00 USDC proven", status_of("w1-b0042.sale_base_rpc", report)["detail"])
         self.assertIn("1 transfer", status_of("w1-b0042.ownership_chain", report)["detail"])
 

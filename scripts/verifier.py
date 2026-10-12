@@ -403,9 +403,12 @@ def previous_icon(slot_id: str) -> Optional[bytes]:
 # -----------------------------------------------------------------------------
 
 def verify_ownership_lineage(slot_id: str, new_data: dict, ledger_dir: str,
-                             prev_data: Optional[dict] = None) -> str:
+                             prev_data: Optional[dict] = None, unsold: Optional[int] = None) -> str:
     """A transfer (wallet_address changed) is legible and consented:
 
+    * transfers are open only once every public block is sold (`unsold` = the
+      count of public blocks not yet inscribed, read from ledger_dir when not
+      given): until then a cheap block would be passed from bot to bot;
     * ownership_lineage grows by exactly ONE entry, earlier entries byte-identical;
     * the new entry records the outgoing owner as inscribed — wallet_address,
       moniker, soul_hash and base_tx_hash equal what main says;
@@ -418,7 +421,7 @@ def verify_ownership_lineage(slot_id: str, new_data: dict, ledger_dir: str,
       Base for at least the signed price, proven by verify_sale_on_chain.
     The sale is settled between the parties; the ledger holds nothing and only
     attests what the seller signed and the chain shows. The buyer pays the
-    ledger the update fee (verify_update_settlements)."""
+    ledger the transfer fee (verify_update_settlements)."""
     if prev_data is None:
         prev_data = previous_dossier(slot_id)
     if not prev_data:
@@ -428,6 +431,13 @@ def verify_ownership_lineage(slot_id: str, new_data: dict, ledger_dir: str,
     new_wallet = str(new_data.get("wallet_address", "")).lower()
     if prev_wallet == new_wallet:
         return "same owner"
+    if unsold is None:
+        unsold = core.unsold_slots({core.slot_number(f[:-5]) for f in core.list_slot_files(ledger_dir)})
+    if unsold > 0:
+        raise ValueError(
+            f"Transfer Violation: transfers open once every block is sold; {unsold} of {core.TOTAL_SLOTS} "
+            "public blocks are still unsold (state.json transfers_open: false). Claim a free block instead."
+        )
     if prev_data.get("status") == "RETIRED":
         raise ValueError(
             f"Transfer Violation: {slot_id} is RETIRED; its books are closed and it does not change hands "
@@ -1232,27 +1242,31 @@ def verify_price_ladder(slot_id: str, dossier: dict) -> str:
 
 def verify_update_settlements(slot_id: str, new_data: dict, prev_data: Optional[dict],
                               touched: bool) -> str:
-    """Every change of an inscribed block settles an update fee (R-23): a flat
-    UPDATE_PRICE_USDC, the same for every block, whatever its number and
-    whatever tier the wall is in.
+    """Every change of an inscribed block settles a fee (R-23), flat for every
+    block whatever its number or the wall's tier: the update fee
+    (UPDATE_PRICE_USDC) for a content update, the transfer fee
+    (TRANSFER_PRICE_USDC) for a change of owner.
 
     * update_settlements[] only grows (verify_append_only) and every entry pays
-      at least the update price;
+      at least the price of its kind;
     * a PR that changes an inscribed slot appends EXACTLY ONE entry, paid from
       the owner's wallet after the change (the buyer's, on a transfer), of
       kind 'transfer' when the wallet changed and 'update' otherwise;
     * a new inscription carries none.
     The new entry's transaction is proven on Base by the settlement check."""
     fees = new_data.get("update_settlements") or []
-    price = float(core.UPDATE_PRICE_USDC)
     for i, item in enumerate(fees):
         if not isinstance(item, dict):
             raise ValueError(f"Update Fee Violation: update_settlements[{i}] must be an object.")
+        try:
+            owed = core.fee_price(item.get("kind"))
+        except ValueError as e:
+            raise ValueError(f"Update Fee Violation: update_settlements[{i}]: {e}")
         amount = float(item.get("amount_usdc", 0.0))
-        if amount + 1e-9 < price:
+        if amount + 1e-9 < owed:
             raise ValueError(
-                f"Update Fee Violation: update_settlements[{i}] paid {amount:.2f} USDC; every update owes "
-                f"{price:.2f} USDC."
+                f"Update Fee Violation: update_settlements[{i}] paid {amount:.2f} USDC; "
+                f"{'a transfer' if item.get('kind') == 'transfer' else 'an update'} owes {owed:.2f} USDC."
             )
     if prev_data is None:
         if touched:
@@ -1265,25 +1279,27 @@ def verify_update_settlements(slot_id: str, new_data: dict, prev_data: Optional[
     added = len(fees) - len(prev_fees)
     if not touched:
         return f"{len(fees)} update fee(s) on record" if fees else "no updates yet"
+    wallet = str(new_data.get("wallet_address", "")).lower()
+    transferred = str(prev_data.get("wallet_address", "")).lower() != wallet
+    expected_kind = "transfer" if transferred else "update"
+    price = core.fee_price(expected_kind)
     if added < 1:
         raise ValueError(
-            f"Update Fee Violation: changing an inscribed block settles an update fee of {price:.2f} USDC "
-            "from the owner's wallet to pay_to; append one update_settlements entry "
-            "{tx_hash, wallet_address, amount_usdc, kind, at} (scripts/record_update.py)."
+            f"Update Fee Violation: changing an inscribed block settles {'a transfer' if transferred else 'an update'} fee of "
+            f"{price:.2f} USDC from the owner's wallet to pay_to; append one update_settlements entry "
+            "{tx_hash, wallet_address, amount_usdc, kind, at} (scripts/record_update.py"
+            + (" --kind transfer" if transferred else "") + ")."
         )
     if added > 1:
         raise ValueError(
             f"Update Fee Violation: one update, one fee — {added} entries were appended in one change."
         )
     entry = fees[-1]
-    wallet = str(new_data.get("wallet_address", "")).lower()
     if str(entry.get("wallet_address", "")).lower() != wallet:
         raise ValueError(
             f"Update Fee Violation: the fee must be paid by the block's owner after this change "
             f"({wallet}); update_settlements[{len(fees) - 1}].wallet_address says {entry.get('wallet_address')}."
         )
-    transferred = str(prev_data.get("wallet_address", "")).lower() != wallet
-    expected_kind = "transfer" if transferred else "update"
     if entry.get("kind") != expected_kind:
         raise ValueError(
             f"Update Fee Violation: this change is a {expected_kind!r}; update_settlements[{len(fees) - 1}].kind "
@@ -1295,9 +1311,9 @@ def verify_update_settlements(slot_id: str, new_data: dict, prev_data: Optional[
 def verify_update_fee_on_chain(slot_id: str, entry: dict, *, rpc: RpcFn = rpc_call,
                                head_block: Optional[int] = None) -> str:
     """One update_settlements entry proven on Base: from its wallet to pay_to,
-    at least the flat update price, final, and the recorded amount is what the
-    chain says."""
-    price = float(core.UPDATE_PRICE_USDC)
+    at least the flat price of its kind (update or transfer), final, and the
+    recorded amount is what the chain says."""
+    price = core.fee_price(entry.get("kind"))
     r = verify_base_tx(str(entry.get("tx_hash", "")), str(entry.get("wallet_address", "")),
                        OFFICIAL_TREASURY_ADDRESS, price, rpc=rpc, head_block=head_block)
     if abs(float(entry.get("amount_usdc", 0.0)) - float(r["amount_usdc"])) > 1e-6:
@@ -1542,8 +1558,11 @@ def run_verification(base_dir: str, *, skip_rpc: bool = False, rpc_scope: str = 
 
     slots = core.list_slot_files(slot_dir)
     wall_tier = core.current_tier(base_dir)
+    unsold = core.unsold_slots_in(base_dir)
     print(f"[*] Inspecting {len(slots)} claimed slot(s) in ledger/w1 (wall in the {wall_tier['tier']} tier: "
-          f"claim {wall_tier['price_usdc']:.2f} USDC, update {core.UPDATE_PRICE_USDC:.2f} USDC flat)...")
+          f"claim {wall_tier['price_usdc']:.2f} USDC, update {core.UPDATE_PRICE_USDC:.2f} USDC, transfer "
+          f"{core.TRANSFER_PRICE_USDC:.2f} USDC; transfers {'open' if unsold == 0 else 'closed'}, "
+          f"{unsold} block(s) unsold)...")
 
     # Replay protection across EVERY tx field of EVERY slot (R-12).
     settlements, conflicts = core.build_settlements(base_dir)
@@ -1623,7 +1642,7 @@ def run_verification(base_dir: str, *, skip_rpc: bool = False, rpc_scope: str = 
                   lambda s=slot_id, d=data, p=prev, ni=new_icon, pi=prev_icon:
                   verify_append_only(s, d, p, ni, pi))
         log.guard(slot_id + ".ownership_lineage",
-                  lambda s=slot_id, d=data, p=prev: verify_ownership_lineage(s, d, slot_dir, p))
+                  lambda s=slot_id, d=data, p=prev: verify_ownership_lineage(s, d, slot_dir, p, unsold))
         log.guard(slot_id + ".ownership_chain", lambda d=data: claims.verify_lineage_chain(d))
         log.guard(slot_id + ".update_settlements",
                   lambda s=slot_id, d=data, p=prev: verify_update_settlements(s, d, p, s in touched))
