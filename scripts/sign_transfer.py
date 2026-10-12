@@ -16,7 +16,9 @@ The First Wall — Release a block to its buyer
 
 Transfers open only once every public block is sold (state.json transfers_open; until then
 a cheap block would be passed from bot to bot). This tool refuses to sign or check an offer
-before that; the verifier refuses the transfer.
+before that; the verifier refuses the transfer. The ten founding blocks (#0001-#0010) are
+exempt: they are never sold at the public price, so a founder may hand one over, or move it
+to a fresh wallet, at any time (docs/runbooks/wallet-rotation.md).
 
 The safe order, protecting both sides without an escrow:
 
@@ -123,14 +125,15 @@ def main(argv: list, rpc=None, base_dir: str = BASE_DIR) -> int:
     if not key:
         print("[✗] No key: set CLAIM_PRIVATE_KEY or pass --key-file.", file=sys.stderr)
         return 2
-    if unsold:
+    slot_id = str(d.get("slot_id", ""))
+    if not core.transfers_open_for(slot_id, unsold):
         print(f"[✗] transfers open once every block is sold; {unsold} public blocks are still unsold "
-              "(state.json transfers_open: false). Nothing signed.", file=sys.stderr)
+              "(state.json transfers_open: false). Only the founding blocks #0001-#0010 may change hands "
+              "before then. Nothing signed.", file=sys.stderr)
         return 1
     if d.get("status") == "RETIRED":
         print("[✗] this block is RETIRED; its books are closed and it does not change hands.", file=sys.stderr)
         return 1
-    slot_id = str(d.get("slot_id", ""))
     from_wallet = str(d.get("wallet_address", ""))
     index = len(d.get("ownership_lineage") or [])
     if "--valid-until" in argv:

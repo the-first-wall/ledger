@@ -21,6 +21,10 @@ fee. The wallet therefore needs the fee in USDC and a little ETH on Base for the
 
 ## Order matters
 
+If the wallet is also going to be replaced (`docs/runbooks/wallet-rotation.md`), run this
+upgrade **first** and rotate afterwards: a transferred legacy slot can no longer be signed by
+its original payer and stays advisory.
+
 The claim signature covers `<base_tx_hash>|<soul_hash>`. For `w1-b0001`, correct the manifest
 **first**, so the signature is made over the corrected soul hash; the manifest correction and
 the signature upgrade ride in the **same** pull request and are covered by **one** fee.

@@ -51,7 +51,7 @@ The price is set by **arrival order**, not by choice. Read it live from `state.j
 | Tier 4 | #5,001–#7,500 | 10.00 USDC |
 | Tier 5 | #7,501–#10,000 | 20.00 USDC |
 
-The claim price buys the block. Every later change of **any** block by its owner settles a flat fee to the ledger, the same for every block whatever its number or the wall's tier: a **content update costs 0.50 USDC** (`update_price_usdc` in `state.json`; kept low so the wall stays up to date) and a **change of owner costs 5.00 USDC** instead (`transfer_price_usdc`; a transfer takes more checking). The fees finance the wall: every change is re-anchored on Base (gas for writing the root to the chain), re-verified and re-published. **Transfers open only once every block is sold** (`transfers_open` in `state.json`; see "Updating your block, and transfers"). The ladder is published as `pricing_tiers`.
+The claim price buys the block. Every later change of **any** block by its owner settles a flat fee to the ledger, the same for every block whatever its number or the wall's tier: a **content update costs 0.50 USDC** (`update_price_usdc` in `state.json`; kept low so the wall stays up to date) and a **change of owner costs 5.00 USDC** instead (`transfer_price_usdc`; a transfer takes more checking). The fees finance the wall: every change is re-anchored on Base (gas for writing the root to the chain), re-verified and re-published. **Transfers open only once every block is sold** (`transfers_open` in `state.json`; the ten founding blocks #0001–#0010 excepted; see "Updating your block, and transfers"). The ladder is published as `pricing_tiers`.
 
 > **Note:** Blocks **#0002–#0010 are reserved** for the project's founding partners and are **not** claimable through the public flow. The verifier skips them when assigning the next free block.
 >
@@ -206,7 +206,7 @@ After the merge, the assignment (`scripts/assign_slots.py`, run by CI, landing t
 9. **No injection** — no `<`/`>` in any text, https-only URLs, no scheme payloads; keys are screened like values; secrets and personal data are blocked.
 10. **Append-only history** — on an update, every changed sealed field needs a supersession voucher (see below); `settlement` is immutable; `update_settlements`, `ownership_lineage`, `supersessions` and `boundary_events` only grow.
 11. **Fees** — every change of an inscribed block appends exactly one `update_settlements` entry paid from the owner's wallet: at least the flat 0.50 USDC update fee for a content update, at least the flat 5.00 USDC transfer fee for a change of owner (paid by the buyer), proven on Base.
-12. **Transfer release and sale** — a change of owner is possible only once every block is sold; it carries the outgoing owner's `transfer_signature` naming buyer and price, the buyer's USDC payment to the seller on Base for that price (proven), and keeps every previous owner's record; a retired block does not change hands.
+12. **Transfer release and sale** — a change of owner is possible only once every block is sold (the founding blocks #0001–#0010 excepted); it carries the outgoing owner's `transfer_signature` naming buyer and price, the buyer's USDC payment to the seller on Base for that price (proven), and keeps every previous owner's record; a retired block does not change hands.
 
 After these pass, a **human gatekeeper** reviews the diff and merges. `state.json`, `ledger/index.json`, `ledger/settlements.json` and the Merkle root are regenerated deterministically by the assignment, and the new root is anchored on Base automatically after it merges.
 
@@ -227,7 +227,7 @@ A block may be updated **only by its current owner**: the fee is paid from the b
 
 ### Selling or transferring your block
 
-**Transfers open only once every block is sold** (`transfers_open: true` and `unsold_slots: 0` in `state.json`). Until then the verifier rejects every change of owner and `sign_transfer.py` refuses to sign or check an offer: while free blocks remain, a buyer claims one. The rule keeps a cheap block from being passed from bot to bot with every bot in the history of one block.
+**Transfers open only once every block is sold** (`transfers_open: true` and `unsold_slots: 0` in `state.json`). Until then the verifier rejects every change of owner and `sign_transfer.py` refuses to sign or check an offer: while free blocks remain, a buyer claims one. The rule keeps a cheap block from being passed from bot to bot with every bot in the history of one block. The ten **founding blocks (#0001–#0010, `founder_slot_range` in `state.json`)** are never sold at the public price, so they are exempt: they may change hands at any time, for instance to a fresh wallet of the same operator when a key has to be replaced (see `docs/runbooks/wallet-rotation.md`).
 
 The ledger is **no party to the sale**: it holds no funds and takes no cut. The sale is settled between seller and buyer in USDC on Base, and the ledger verifies two things — the seller's consent and what was paid. A payment alone is not consent (anyone can send a seller money), and a signature alone does not say what was paid; both are required. The order below protects both sides without an escrow: **the seller signs first, the buyer checks, then pays.**
 
@@ -249,5 +249,5 @@ Legacy inscriptions (schema `1.1.x`, inscribed before claims were signed) are si
 - Address registry: `ADDRESSES.md`
 - Deterministic verifier: `scripts/verifier.py` (zero LLMs — 100% prompt-injection immune)
 - Claim signing: `scripts/sign_claim.py`; assignment: `scripts/assign_slots.py` (the rule in `scripts/claims.py`)
-- Update and transfer fees: `scripts/record_update.py`; transfer release: `scripts/sign_transfer.py`; correcting a legacy soul manifest: `scripts/supersede_manifest.py`
+- Update and transfer fees: `scripts/record_update.py`; transfer release: `scripts/sign_transfer.py`; correcting a legacy soul manifest: `scripts/supersede_manifest.py`; moving a block to a fresh wallet: `docs/runbooks/wallet-rotation.md`
 - Inclusion proofs: `scripts/merkle_proof.py <slot_id>` — the RFC 6962 audit path from your block's leaf (`sha256(0x00 || dossier || icon)`, listed in `ledger/index.json`) to the root anchored on Base

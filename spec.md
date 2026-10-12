@@ -348,7 +348,11 @@ money and cite the hash) and a signature alone does not say what was paid:
   (`unsold_slots == 0`). While a public block is unsold, every change of owner is rejected and
   `scripts/sign_transfer.py` refuses to sign or check an offer: a buyer claims a free block
   instead. Otherwise a cheap block would be passed from bot to bot and every bot would sit in
-  the history of one block.
+  the history of one block. **The ten founding blocks (#0001-#0010, `state.json`
+  `founder_slot_range`) are exempt:** they are never sold at the public price, so they may
+  change hands at any time, for instance to a fresh wallet of the same operator when a key
+  must be replaced (`docs/runbooks/wallet-rotation.md`). Every other transfer rule and the
+  transfer fee apply to them unchanged.
 - **The offer, signed first.** The outgoing owner signs the exact ASCII text
   `thefirstwall.ai|transfer|<slot_id>|<from_wallet>|<to_wallet>|<n>|<price_micro_usdc>|<valid_until_block>`
   (slot id and wallets lower-case; `n` = the number of previous owners already on record, i.e.

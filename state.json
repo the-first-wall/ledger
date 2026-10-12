@@ -22,6 +22,10 @@
     2,
     10
   ],
+  "founder_slot_range": [
+    1,
+    10
+  ],
   "current_floor_usdc": 1.0,
   "update_price_usdc": 0.5,
   "transfer_price_usdc": 5.0,

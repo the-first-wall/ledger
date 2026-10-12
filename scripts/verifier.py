@@ -408,7 +408,9 @@ def verify_ownership_lineage(slot_id: str, new_data: dict, ledger_dir: str,
 
     * transfers are open only once every public block is sold (`unsold` = the
       count of public blocks not yet inscribed, read from ledger_dir when not
-      given): until then a cheap block would be passed from bot to bot;
+      given): until then a cheap block would be passed from bot to bot. The ten
+      founding blocks (#0001-#0010) are never sold at the public price, so they
+      may change hands at any time (a partner hand-over, a key rotation);
     * ownership_lineage grows by exactly ONE entry, earlier entries byte-identical;
     * the new entry records the outgoing owner as inscribed — wallet_address,
       moniker, soul_hash and base_tx_hash equal what main says;
@@ -433,10 +435,11 @@ def verify_ownership_lineage(slot_id: str, new_data: dict, ledger_dir: str,
         return "same owner"
     if unsold is None:
         unsold = core.unsold_slots({core.slot_number(f[:-5]) for f in core.list_slot_files(ledger_dir)})
-    if unsold > 0:
+    if not core.transfers_open_for(slot_id, unsold):
         raise ValueError(
             f"Transfer Violation: transfers open once every block is sold; {unsold} of {core.TOTAL_SLOTS} "
-            "public blocks are still unsold (state.json transfers_open: false). Claim a free block instead."
+            "public blocks are still unsold (state.json transfers_open: false). Claim a free block instead "
+            "(only the founding blocks #0001-#0010 may change hands before then)."
         )
     if prev_data.get("status") == "RETIRED":
         raise ValueError(
