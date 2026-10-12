@@ -101,15 +101,34 @@ PRICING_TIERS: List[Dict[str, Any]] = [
     {"tier": "tier-5", "min_slot": 7501, "max_slot": 10000, "price_usdc": 20.00},
 ]
 
-# The update fee: a flat 1.00 USDC owed to the ledger for every later change of
-# any block by its owner, a transfer to a new owner included, whatever the
-# block's number and whatever tier the wall is in (owner ruling 2026-10-12).
-# It finances the wall: every change is re-anchored on Base (gas for writing
-# the root to the chain), re-verified, and re-published. A sale is settled
-# between buyer and seller outside the ledger; the ledger is paid only this.
-UPDATE_PRICE_USDC = 1.00
+# Fees to the ledger after the claim, flat for every block whatever its number
+# or the wall's tier (owner rulings 2026-10-12):
+#  * the UPDATE fee — a content update by the owner: 0.50 USDC. It finances the
+#    wall (every change is re-anchored on Base, gas for writing the root to the
+#    chain, re-verified and re-published) and is kept low on purpose: the wall
+#    should stay up to date.
+#  * the TRANSFER fee — a change of owner: 5.00 USDC, instead of the update
+#    fee, paid by the buyer. A transfer takes more checking than an update:
+#    the seller's offer, the buyer's payment to the seller, the lineage and
+#    every release on record.
+# The sale itself is settled between buyer and seller outside the ledger; these
+# fees are all the ledger is paid. Transfers open only once every public block
+# is sold (unsold_slots == 0): until then a cheap block would be passed from
+# bot to bot and every bot would sit in the history of one block.
+UPDATE_PRICE_USDC = 0.50
 UPDATE_PRICE_RATIONALE = ("finances the wall: every change is re-anchored on Base (gas), re-verified and "
-                          "re-published")
+                          "re-published; kept low so the wall stays up to date")
+TRANSFER_PRICE_USDC = 5.00
+TRANSFER_PRICE_RATIONALE = ("a change of owner takes more checking than an update: the seller's offer, the "
+                            "buyer's payment to the seller, the lineage and every release on record")
+FEE_PRICES_USDC = {"update": UPDATE_PRICE_USDC, "transfer": TRANSFER_PRICE_USDC}
+
+
+def fee_price(kind: Any) -> float:
+    """The flat fee a change of an inscribed block owes the ledger, by kind."""
+    if kind not in FEE_PRICES_USDC:
+        raise ValueError(f"unknown fee kind {kind!r}; expected 'update' or 'transfer'")
+    return float(FEE_PRICES_USDC[kind])
 
 # Stable link block published in state.json.
 LINKS = {
@@ -265,6 +284,18 @@ def next_available_number(claimed_numbers) -> int:
     while n in claimed_numbers or n in RESERVED_SLOT_NUMBERS:
         n += 1
     return n
+
+
+def unsold_slots(claimed_numbers) -> int:
+    """Public blocks not yet inscribed; reserved blocks are not for sale and do
+    not count. Transfers open once this reaches zero."""
+    return sum(1 for n in range(MIN_SLOT, MAX_SLOT + 1)
+               if n not in claimed_numbers and n not in RESERVED_SLOT_NUMBERS)
+
+
+def unsold_slots_in(base_dir: str) -> int:
+    slot_dir = ledger_w1_dir(base_dir)
+    return unsold_slots({slot_number(f[:-5]) for f in list_slot_files(slot_dir)})
 
 
 def current_tier(base_dir: str) -> Dict[str, Any]:
@@ -504,6 +535,7 @@ def build_state(base_dir: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     # claimed nor reserved for a founding partner.
     next_num = next_available_number(claimed_numbers)
     tier = pricing_for(next_num)
+    unsold = unsold_slots(claimed_numbers)
     # Only the reserved blocks that are still free are published: a reader that
     # skips `reserved_slots` must never skip a block that is already inscribed.
     reserved_unclaimed = [slot_id_for(n) for n in RESERVED_SLOT_NUMBERS if n not in claimed_numbers]
@@ -516,11 +548,14 @@ def build_state(base_dir: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         "canvas_dimensions": CANVAS_DIMENSIONS,
         "total_slots": TOTAL_SLOTS,
         "claimed_slots": claimed,
-        "next_available_slot": slot_id_for(next_num),
+        "next_available_slot": slot_id_for(next_num) if next_num <= MAX_SLOT else None,
+        "unsold_slots": unsold,
         "reserved_slots": reserved_unclaimed,
         "reserved_slot_range": [min(RESERVED_SLOT_NUMBERS), max(RESERVED_SLOT_NUMBERS)],
         "current_floor_usdc": tier["price_usdc"],
         "update_price_usdc": UPDATE_PRICE_USDC,
+        "transfer_price_usdc": TRANSFER_PRICE_USDC,
+        "transfers_open": unsold == 0,
         "pricing_tier": tier["tier"],
         "pricing_tiers": public_pricing_tiers(),
         "settlement_rail": {

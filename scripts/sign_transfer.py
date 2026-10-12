@@ -14,6 +14,10 @@ The First Wall — Release a block to its buyer
     # ANYONE — every release on a dossier's record:
     python scripts/sign_transfer.py --verify ledger/w1/w1-b0042.json
 
+Transfers open only once every public block is sold (state.json transfers_open; until then
+a cheap block would be passed from bot to bot). This tool refuses to sign or check an offer
+before that; the verifier refuses the transfer.
+
 The safe order, protecting both sides without an escrow:
 
   1. the SELLER signs the OFFER: thefirstwall.ai|transfer|<slot_id>|<from>|<to>|<n>|<price_micro_usdc>|<valid_until_block>
@@ -24,7 +28,8 @@ The safe order, protecting both sides without an escrow:
      wallet, at the agreed price, with the right n, not retired, not expired. Nothing paid yet.
   3. the BUYER pays exactly the price to the seller's wallet_address in USDC on Base, in ONE
      transaction, before the deadline; that hash is transfer_tx_hash.
-  4. the BUYER pays the ledger's update fee and opens the pull request with offer and payment.
+  4. the BUYER pays the ledger's transfer fee (5.00 USDC) and opens the pull request with offer
+     and payment.
      The verifier proves both; a payment short of the signed price, from another wallet, to
      another wallet or after the deadline is rejected, and the seller keeps the block.
 
@@ -41,6 +46,7 @@ import claims  # noqa: E402
 import ledger_core as core  # noqa: E402
 
 DEFAULT_VALID_FOR_BLOCKS = 43200  # ~24 hours of Base blocks (2 s)
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 
 def verify_chain(dossier: dict) -> list:
@@ -60,8 +66,9 @@ def _arg(argv: list, name: str):
     return argv[argv.index(name) + 1] if name in argv else None
 
 
-def main(argv: list, rpc=None) -> int:
+def main(argv: list, rpc=None, base_dir: str = BASE_DIR) -> int:
     rpc = rpc or core.rpc_call
+    unsold = core.unsold_slots_in(base_dir)
     if "--check-offer" in argv:
         d = core.load_json_strict(_arg(argv, "--check-offer"))
         to_wallet, price, until, sig = (_arg(argv, "--to"), _arg(argv, "--price"), _arg(argv, "--valid-until"),
@@ -75,7 +82,7 @@ def main(argv: list, rpc=None) -> int:
             print(f"[!] could not read the Base chain head ({e}); the deadline is not checked")
             head = None
         try:
-            print("[✓] " + claims.check_offer(d, to_wallet, float(price), int(until), sig, head))
+            print("[✓] " + claims.check_offer(d, to_wallet, float(price), int(until), sig, head, unsold))
         except ValueError as e:
             print(f"[✗] {e}")
             return 1
@@ -116,6 +123,10 @@ def main(argv: list, rpc=None) -> int:
     if not key:
         print("[✗] No key: set CLAIM_PRIVATE_KEY or pass --key-file.", file=sys.stderr)
         return 2
+    if unsold:
+        print(f"[✗] transfers open once every block is sold; {unsold} public blocks are still unsold "
+              "(state.json transfers_open: false). Nothing signed.", file=sys.stderr)
+        return 1
     if d.get("status") == "RETIRED":
         print("[✗] this block is RETIRED; its books are closed and it does not change hands.", file=sys.stderr)
         return 1

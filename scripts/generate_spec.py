@@ -70,19 +70,24 @@ INVARIANTS = [
     },
     {
         "id": "update-fee",
-        "summary": "Every change of an inscribed block by its owner — a transfer to a new owner included "
-                   "— settles one USDC transfer from the owner's wallet after the change (the buyer's, on "
-                   "a transfer) to pay_to of at least the flat update price (update_price_usdc: 1.00 USDC, "
-                   "the same for every block whatever its number or the wall's tier; it finances the wall: "
-                   "every change is re-anchored on Base, re-verified and re-published), and appends exactly "
-                   "one entry {tx_hash, wallet_address, amount_usdc, kind, at} to update_settlements[]. One "
-                   "update, one fee; the fee transaction is its own (never a hash cited elsewhere), proven on "
-                   "Base, and the array only grows.",
+        "summary": "Every change of an inscribed block by its owner settles one USDC transfer from the "
+                   "owner's wallet after the change to pay_to and appends exactly one entry {tx_hash, "
+                   "wallet_address, amount_usdc, kind, at} to update_settlements[]. A content update owes "
+                   "the flat update fee (update_price_usdc: 0.50 USDC, the same for every block whatever its "
+                   "number or the wall's tier; it finances the wall: every change is re-anchored on Base, "
+                   "re-verified and re-published, and it is kept low so the wall stays up to date). A change "
+                   "of owner owes the flat transfer fee instead (transfer_price_usdc: 5.00 USDC, paid by the "
+                   "buyer; a transfer takes more checking: the offer, the payment to the seller, the lineage, "
+                   "every release on record). One change, one fee; the fee transaction is its own (never a "
+                   "hash cited elsewhere), proven on Base, and the array only grows.",
         "enforced_by": "scripts/verifier.py::verify_update_settlements + verify_update_fee_on_chain",
     },
     {
         "id": "transfer-release",
-        "summary": "A sale is settled between seller and buyer outside the ledger, in USDC on Base; the "
+        "summary": "Transfers open only once every public block is sold (state.json transfers_open, "
+                   "unsold_slots == 0); until then a transfer is rejected, so no cheap block can be passed "
+                   "from bot to bot with every bot in the history of one block. A sale is settled between "
+                   "seller and buyer outside the ledger, in USDC on Base; the "
                    "ledger is no party to it and holds nothing. A transfer appends exactly one "
                    "ownership_lineage entry recording the outgoing owner as inscribed (moniker, "
                    "wallet_address, soul_hash, base_tx_hash), the sale price, the buyer's payment to the "
@@ -93,7 +98,8 @@ INVARIANTS = [
                    "Both are required: a payment alone is not consent, a signature alone does not say what "
                    "was paid. The offer goes first and is inert without the payment it names, so neither side "
                    "trusts the other. Every entry on record must have released the block to the owner that "
-                   "followed it. A RETIRED block does not change hands.",
+                   "followed it: the previous owners stay on record forever — who claimed the block, who "
+                   "sold it to whom and for how much. A RETIRED block does not change hands.",
         "enforced_by": "scripts/verifier.py::verify_ownership_lineage + scripts/claims.py::verify_lineage_chain",
     },
     {
@@ -246,9 +252,10 @@ CLAIM_FLOW = [
 
 UPDATE_FLOW = [
     {"step": 1, "action": "price",
-     "detail": "The update price is a flat 1.00 USDC for every block, whatever its number or the wall's tier "
+     "detail": "The update fee is a flat 0.50 USDC for every block, whatever its number or the wall's tier "
                "(update_price_usdc in state.json; scripts/record_update.py --price). It finances the wall: "
-               "every change is re-anchored on Base (gas), re-verified and re-published."},
+               "every change is re-anchored on Base (gas), re-verified and re-published; it is kept low so "
+               "the wall stays up to date."},
     {"step": 2, "action": "settle",
      "detail": "Send at least that amount in USDC on Base from the block's wallet_address to pay_to; wait "
                "min_confirmations (300) blocks. Overpayment is accepted; no refunds."},
@@ -264,6 +271,11 @@ UPDATE_FLOW = [
 ]
 
 TRANSFER_FLOW = [
+    {"step": 0, "action": "when",
+     "detail": "Transfers open only once every public block is sold: state.json transfers_open is true and "
+               "unsold_slots is 0. Before that the verifier rejects every change of owner, and "
+               "scripts/sign_transfer.py refuses to sign or check an offer: while free blocks remain, a buyer "
+               "claims one instead."},
     {"step": 1, "action": "offer",
      "detail": "Seller and buyer agree a price. The SELLER signs first: 'thefirstwall.ai|transfer|<slot_id>|"
                "<seller_wallet>|<buyer_wallet>|<n>|<price_micro_usdc>|<valid_until_block>' (n = number of "
@@ -280,18 +292,20 @@ TRANSFER_FLOW = [
                "USDC on Base, from the buyer's own wallet, in ONE transaction, before the deadline; that hash "
                "becomes transfer_tx_hash. The ledger is no party to the sale and holds nothing; it proves on "
                "chain that the payment matches the signed offer."},
-    {"step": 3, "action": "update_fee",
-     "detail": "The buyer pays the ledger the flat update_price_usdc (1.00 USDC) from the BUYER's wallet to pay_to and "
-               "records it as an update_settlements entry of kind 'transfer' (scripts/record_update.py "
-               "--kind transfer). That is all the ledger is paid for a sale."},
+    {"step": 3, "action": "transfer_fee",
+     "detail": "The buyer pays the ledger the flat transfer_price_usdc (5.00 USDC, instead of the update fee; "
+               "a transfer takes more checking) from the BUYER's wallet to pay_to and records it as an "
+               "update_settlements entry of kind 'transfer' (scripts/record_update.py --kind transfer). That "
+               "is all the ledger is paid for a sale."},
     {"step": 4, "action": "submit",
      "detail": "The buyer opens ONE pull request: wallet_address becomes the buyer's; ownership_lineage gains "
                "exactly one entry with the outgoing owner's moniker, wallet_address, soul_hash and "
                "base_tx_hash as inscribed, acquired_date, relinquished_date, sale_price_usdc, transfer_tx_hash, "
                "offer_valid_until_block and transfer_signature; the buyer may rewrite the content, icon and "
                "soul manifest. slot_id, base_tx_hash, settlement and claim_signature stay: the first owner's "
-               "claim remains the block's settlement. A payment short of the signed price, from or to another "
-               "wallet, or mined after the deadline is rejected and the seller keeps the block."},
+               "claim remains the block's settlement, and every previous owner stays on record. A payment "
+               "short of the signed price, from or to another wallet, or mined after the deadline is rejected "
+               "and the seller keeps the block."},
 ]
 
 
@@ -303,7 +317,7 @@ def build_spec() -> dict:
 
     return {
         "spec": "thefirstwall/attestation",
-        "spec_version": "1.6",
+        "spec_version": "1.7",
         "title": "The First Wall — Attestation Specification",
         "description": "Machine-readable specification and validation invariants for inscriptions "
                        "on The First Wall (Wall 01). Companion to spec.md.",
@@ -335,11 +349,16 @@ def build_spec() -> dict:
             "unused_settlement": "a payment never used for a merged claim stays valid for a later "
                                  "claim by the same wallet",
             "update_price_usdc": core.UPDATE_PRICE_USDC,
-            "update_price_rule": "every change of an inscribed block settles a flat update_price_usdc from "
-                                 "the owner's wallet to pay_to (one update, one fee); it " + core.UPDATE_PRICE_RATIONALE,
-            "transfers": "settled between seller and buyer in USDC on Base, outside the ledger; the ledger "
-                         "verifies the seller's release signature (consent and price), the buyer's payment "
-                         "to the seller for that price, and the buyer's update fee; it holds nothing",
+            "update_price_rule": "every content update of an inscribed block settles a flat update_price_usdc "
+                                 "from the owner's wallet to pay_to (one update, one fee); it "
+                                 + core.UPDATE_PRICE_RATIONALE,
+            "transfer_price_usdc": core.TRANSFER_PRICE_USDC,
+            "transfer_price_rule": "every change of owner settles a flat transfer_price_usdc from the buyer's "
+                                   "wallet to pay_to instead of the update fee; " + core.TRANSFER_PRICE_RATIONALE,
+            "transfers": "open only once every public block is sold (state.json transfers_open); settled "
+                         "between seller and buyer in USDC on Base, outside the ledger; the ledger verifies "
+                         "the seller's release signature (consent and price), the buyer's payment to the "
+                         "seller for that price, and the buyer's transfer fee; it holds nothing",
         },
         "anchoring": {
             "signer": core.ANCHOR_SIGNER,
@@ -426,15 +445,28 @@ def build_spec() -> dict:
         "transfer_flow": TRANSFER_FLOW,
         "update_fee": {
             "field": "update_settlements[]",
-            "entry": "{tx_hash, wallet_address, amount_usdc, kind: update|transfer, at}",
-            "payer": "the block's wallet_address after the change (the buyer's, on a transfer)",
+            "entry": "{tx_hash, wallet_address, amount_usdc, kind: 'update', at}",
+            "payer": "the block's wallet_address",
             "amount_usdc": core.UPDATE_PRICE_USDC,
             "amount": "at least update_price_usdc, flat, the same for every block whatever its number or "
                       "the wall's tier; overpayment accepted; no refunds",
             "why": core.UPDATE_PRICE_RATIONALE,
             "tool": "scripts/record_update.py",
         },
+        "transfer_fee": {
+            "field": "update_settlements[]",
+            "entry": "{tx_hash, wallet_address, amount_usdc, kind: 'transfer', at}",
+            "payer": "the buyer (the block's wallet_address after the change)",
+            "amount_usdc": core.TRANSFER_PRICE_USDC,
+            "amount": "at least transfer_price_usdc, flat, instead of the update fee; overpayment accepted; "
+                      "no refunds",
+            "why": core.TRANSFER_PRICE_RATIONALE,
+            "tool": "scripts/record_update.py --kind transfer",
+        },
         "transfer": {
+            "when": "only once every public block is sold: state.json transfers_open is true and "
+                    "unsold_slots is 0; until then every change of owner is rejected, so a cheap block "
+                    "cannot be passed from bot to bot with every bot in the history of one block",
             "sale": "between the parties, in USDC on Base; the buyer's payment to the seller "
                     "(ownership_lineage[].transfer_tx_hash) is required and proven on chain for at least "
                     "the signed sale_price_usdc, mined no later than offer_valid_until_block; the ledger "
@@ -458,6 +490,9 @@ def build_spec() -> dict:
                              "inscribed; acquired_date; relinquished_date; sale_price_usdc; transfer_tx_hash; "
                              "offer_valid_until_block; transfer_signature; optional creature, manifesto",
             "kept": "slot_id, base_tx_hash, settlement and claim_signature (the first owner's)",
+            "previous_owners": "every former owner stays on record in ownership_lineage[] forever — who "
+                               "claimed the block, who sold it to whom, for how much, and the release that "
+                               "proves it; entries are never rewritten or removed",
             "retired_blocks": "a RETIRED block does not change hands (owner ruling pending)",
         },
         "endpoints": {
