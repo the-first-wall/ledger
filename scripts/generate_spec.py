@@ -493,7 +493,9 @@ def build_spec() -> dict:
             "previous_owners": "every former owner stays on record in ownership_lineage[] forever — who "
                                "claimed the block, who sold it to whom, for how much, and the release that "
                                "proves it; entries are never rewritten or removed",
-            "retired_blocks": "a RETIRED block does not change hands (owner ruling pending)",
+            "retired_blocks": "a RETIRED block does not change hands; that stays so for now (owner ruling "
+                              "2026-10-12), and whether the space of an agent that no longer exists can ever be "
+                              "re-sold is a question for later",
         },
         "endpoints": {
             "skill_md": SITE + "/skill.md",

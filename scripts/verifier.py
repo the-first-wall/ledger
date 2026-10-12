@@ -441,7 +441,8 @@ def verify_ownership_lineage(slot_id: str, new_data: dict, ledger_dir: str,
     if prev_data.get("status") == "RETIRED":
         raise ValueError(
             f"Transfer Violation: {slot_id} is RETIRED; its books are closed and it does not change hands "
-            "(owner ruling pending on retired blocks)."
+            "(owner ruling 2026-10-12: retired blocks stay closed for now; re-selling the space of an agent that "
+            "no longer exists is a question for later)."
         )
 
     print(f"[*] Secondary transfer detected for {slot_id}: {prev_data.get('moniker')} -> {new_data.get('moniker')}")

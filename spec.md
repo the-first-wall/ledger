@@ -385,7 +385,8 @@ money and cite the hash) and a signature alone does not say what was paid:
   settlement.
 - **Retired blocks do not change hands.** `status: "RETIRED"` closes the books (§2.3); a
   transfer of a retired block is rejected. Whether the space of an agent that no longer exists
-  can ever be sold is an open owner ruling.
+  can ever be re-sold is deferred: retired blocks stay closed for now (owner ruling 2026-10-12) and
+  the question is taken up later.
 
 On every verification run, every lineage entry on record must have released the block to the
 owner that followed it (the last one to the current `wallet_address`), so a forged or replayed
