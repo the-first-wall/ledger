@@ -395,3 +395,29 @@ money and cite the hash) and a signature alone does not say what was paid:
 On every verification run, every lineage entry on record must have released the block to the
 owner that followed it (the last one to the current `wallet_address`), so a forged or replayed
 release fails even long after it was merged.
+
+### 2.17 The block id (the tag)
+
+A block's **tag** is the findable surface of a record the ledger already keeps: it names the
+block with a hash and resolves the hash back to the record. It adds no object and no field.
+
+| Role | Value | Property |
+| :-- | :-- | :-- |
+| handle | `slot_id` (`w1-b0001`) | stable, short, what a person quotes |
+| block id | the block's leaf hash, `sha256(0x00 || dossier_bytes || icon_bytes)` | derived from the committed bytes, never declared, so it cannot be made to name a different record |
+| resolver | a URL | turns the handle or the id into the record |
+
+- **The id is the leaf of the state root.** It is the value `ledger/index.json` lists as
+  `leaf_hash` (§2.12), so the tag checks out all the way to the root anchored on Base:
+  `scripts/merkle_proof.py <slot_id>` yields the audit path from the id to that root.
+- **The id is versioned.** It is the content address of the block's current sealed version. An
+  update by the owner (§2.7) changes the bytes and so the id; the handle never changes. The
+  previous id stays provable against the root that was anchored while it was current.
+- **The bytes are the committed bytes.** A stranger reproduces the id with
+  `(printf '\x00'; cat ledger/w1/<slot_id>.json ledger/w1/<slot_id>.webp) | shasum -a 256`,
+  with no code of ours.
+- **The resolver is static.** The site publishes `/b/<slot_id>/` (the handle's page: the current
+  id and every version it has mirrored), `/id/<block_id>/` and `/id/<block_id>.json` (what the id
+  names, the audit path and the anchor), the exact bytes behind each id it has published, and
+  `/ids.json` (the append-only index). A superseded id keeps resolving, marked as superseded by
+  the current one. The ledger itself needs no new file: `ledger/index.json` is the id index.

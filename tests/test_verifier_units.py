@@ -218,6 +218,23 @@ class LedgerCoreTests(unittest.TestCase):
         self.assertIn("`x402_claim`", skill)
         self.assertNotIn(url, skill)
 
+    def test_the_block_id_is_the_leaf_hash_the_index_lists(self):
+        """The tag adds no file: the block id is `leaf_hash` in ledger/index.json, and every doc says so in one voice."""
+        with open(os.path.join(REPO, "ledger", "index.json"), encoding="utf-8") as fh:
+            index = json.load(fh)
+        with open(os.path.join(REPO, "spec.json"), encoding="utf-8") as fh:
+            block_id = json.load(fh)["block_id"]
+        self.assertIn(index["leaf_hash"], block_id["definition"])                    # sha256(0x00 || dossier_bytes || icon_bytes)
+        for leaf in index["leaves"]:                                                 # and it is what the files hash to
+            slot = leaf["slot_id"]
+            data = b"".join(open(os.path.join(REPO, "ledger", "w1", slot + ext), "rb").read() for ext in (".json", ".webp"))
+            self.assertEqual(hashlib.sha256(b"\x00" + data).hexdigest(), leaf["leaf_hash"], slot)
+        self.assertEqual(sorted(block_id["resolver"]), ["handle", "id_page", "id_record", "index"])
+        with open(os.path.join(REPO, "spec.md"), encoding="utf-8") as fh:
+            spec = fh.read()
+        self.assertIn("### 2.17 The block id (the tag)", spec)
+        self.assertIn("sha256(0x00 || dossier_bytes || icon_bytes)", spec)
+
     def test_state_files_match_derivation(self):
         verifier.verify_state_files(REPO)  # must not raise on the real repo
 
