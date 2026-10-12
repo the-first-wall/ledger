@@ -71,7 +71,7 @@
     "pay_to": "0xbbF4D6B954e97C2C4fbC4e89B7933cDD7e4D9f23"
   },
   "min_confirmations": 300,
-  "merkle_root": "970d1102cd58544ba2fe026aa1f775ded14114d34001bad49006359c7c54148e",
+  "merkle_root": "983210b6295c650d3ed285f32c7a07c313513dd885d66f5ddfe107c5c7f2ab9e",
   "root_scheme": "reckoning",
   "tree_size": 2,
   "last_updated": "2026-10-12T22:38:05Z",
