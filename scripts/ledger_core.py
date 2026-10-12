@@ -25,7 +25,7 @@ import json
 import os
 import re
 import urllib.request
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 # --- Ledger constants -------------------------------------------------------
 
@@ -91,13 +91,25 @@ RESERVED_SLOTS = [f"w1-b{n:04d}" for n in RESERVED_SLOT_NUMBERS]
 
 # Deterministic pricing ladder. The tier is derived purely from slot count;
 # it is never hand-edited. See skill.md / spec.md for the public description.
+# price_usdc buys the block (the claim); the tier is set by how many blocks
+# have been sold (owner ruling 2026-10-12).
 PRICING_TIERS: List[Dict[str, Any]] = [
     {"tier": "genesis", "min_slot": 1, "max_slot": 500, "price_usdc": 1.00},
-    {"tier": "tier-2", "min_slot": 501, "max_slot": 1500, "price_usdc": 3.00},
-    {"tier": "tier-3", "min_slot": 1501, "max_slot": 5000, "price_usdc": 7.50},
-    {"tier": "tier-4", "min_slot": 5001, "max_slot": 7500, "price_usdc": 15.00},
-    {"tier": "tier-5", "min_slot": 7501, "max_slot": 10000, "price_usdc": 25.00},
+    {"tier": "tier-2", "min_slot": 501, "max_slot": 1500, "price_usdc": 2.50},
+    {"tier": "tier-3", "min_slot": 1501, "max_slot": 5000, "price_usdc": 5.00},
+    {"tier": "tier-4", "min_slot": 5001, "max_slot": 7500, "price_usdc": 10.00},
+    {"tier": "tier-5", "min_slot": 7501, "max_slot": 10000, "price_usdc": 20.00},
 ]
+
+# The update fee: a flat 1.00 USDC owed to the ledger for every later change of
+# any block by its owner, a transfer to a new owner included, whatever the
+# block's number and whatever tier the wall is in (owner ruling 2026-10-12).
+# It finances the wall: every change is re-anchored on Base (gas for writing
+# the root to the chain), re-verified, and re-published. A sale is settled
+# between buyer and seller outside the ledger; the ledger is paid only this.
+UPDATE_PRICE_USDC = 1.00
+UPDATE_PRICE_RATIONALE = ("finances the wall: every change is re-anchored on Base (gas), re-verified and "
+                          "re-published")
 
 # Stable link block published in state.json.
 LINKS = {
@@ -232,7 +244,43 @@ def tx_references(dossier: Dict[str, Any]) -> List[Tuple[str, str]]:
             ttx = item.get("transfer_tx_hash")
             if isinstance(ttx, str) and ttx:
                 refs.append((f"ownership_lineage[{i}].transfer_tx_hash", ttx.lower()))
+    for i, item in enumerate(dossier.get("update_settlements") or []):
+        if isinstance(item, dict):
+            utx = item.get("tx_hash")
+            if isinstance(utx, str) and utx:
+                refs.append((f"update_settlements[{i}].tx_hash", utx.lower()))
     return refs
+
+
+def tier_by_name(name: Any) -> Optional[Dict[str, Any]]:
+    for tier in PRICING_TIERS:
+        if tier["tier"] == name:
+            return tier
+    return None
+
+
+def next_available_number(claimed_numbers) -> int:
+    """The lowest block that is neither inscribed nor reserved."""
+    n = MIN_SLOT
+    while n in claimed_numbers or n in RESERVED_SLOT_NUMBERS:
+        n += 1
+    return n
+
+
+def current_tier(base_dir: str) -> Dict[str, Any]:
+    """The tier the wall is in: that of the next free public block. Its
+    price_usdc is the claim floor."""
+    slot_dir = ledger_w1_dir(base_dir)
+    claimed = {slot_number(f[:-5]) for f in list_slot_files(slot_dir)}
+    return pricing_for(next_available_number(claimed))
+
+
+def public_pricing_tiers() -> List[Dict[str, Any]]:
+    """The ladder as published (state.json, spec.json): the block price per tier."""
+    return [
+        {"tier": t["tier"], "min_block": t["min_slot"], "max_block": t["max_slot"], "price_usdc": t["price_usdc"]}
+        for t in PRICING_TIERS
+    ]
 
 
 def build_settlements(base_dir: str) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
@@ -454,9 +502,7 @@ def build_state(base_dir: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     claimed_numbers = {slot_number(f[:-5]) for f in slots}
     # The next assignable block is the lowest number that is neither already
     # claimed nor reserved for a founding partner.
-    next_num = 1
-    while next_num in claimed_numbers or next_num in RESERVED_SLOT_NUMBERS:
-        next_num += 1
+    next_num = next_available_number(claimed_numbers)
     tier = pricing_for(next_num)
     # Only the reserved blocks that are still free are published: a reader that
     # skips `reserved_slots` must never skip a block that is already inscribed.
@@ -474,7 +520,9 @@ def build_state(base_dir: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         "reserved_slots": reserved_unclaimed,
         "reserved_slot_range": [min(RESERVED_SLOT_NUMBERS), max(RESERVED_SLOT_NUMBERS)],
         "current_floor_usdc": tier["price_usdc"],
+        "update_price_usdc": UPDATE_PRICE_USDC,
         "pricing_tier": tier["tier"],
+        "pricing_tiers": public_pricing_tiers(),
         "settlement_rail": {
             "network": NETWORK,
             "chain_id": CHAIN_ID,

@@ -304,13 +304,13 @@ class PlanTests(unittest.TestCase):
         self.assertIn("not a reserved block", skipped[0]["reason"])
 
     def test_underpaid_claim_waits_and_the_block_stays_free(self):
-        # Genesis tier (#0001–#0500) is 1.00 USDC; tier-2 starts at #0501 at 3.00.
+        # Genesis tier (#0001–#0500) is 1.00 USDC; tier-2 starts at #0501 at 2.50.
         claimed = set(range(1, 501))
         assigned, skipped = claims.plan_assignment(
-            [pending(TX1, 100, amount=1.0), pending(TX2, 200, amount=3.0)], claimed)
+            [pending(TX1, 100, amount=1.0), pending(TX2, 200, amount=2.5)], claimed)
         self.assertEqual([(a["tx_hash"], a["slot_id"]) for a in assigned], [(TX2, "w1-b0501")])
         self.assertEqual(skipped[0]["tx_hash"], TX1)
-        self.assertIn("costs 3.00 USDC", skipped[0]["reason"])
+        self.assertIn("costs 2.50 USDC", skipped[0]["reason"])
 
     def test_overpayment_is_accepted(self):
         assigned, skipped = claims.plan_assignment([pending(TX1, 100, amount=7.25)], {1})
@@ -450,11 +450,11 @@ class LadderTests(unittest.TestCase):
     def test_underpayment_fails_exact_passes_overpayment_is_noted(self):
         d = {"schema_version": "1.2.0", "settlement": settlement(100, 0, 1.0)}
         with self.assertRaisesRegex(ValueError, "Price Ladder Violation"):
-            verifier.verify_price_ladder("w1-b0501", d)          # tier-2: 3.00
+            verifier.verify_price_ladder("w1-b0501", d)          # tier-2: 2.50
         self.assertIn("1.00 USDC for a 1.00 USDC", verifier.verify_price_ladder("w1-b0042", d))
         d["settlement"]["amount_usdc"] = 25.0
         self.assertIn("no refunds", verifier.verify_price_ladder("w1-b0042", d))
-        self.assertIn("25.00 USDC for a 25.00 USDC", verifier.verify_price_ladder("w1-b9999", d))
+        self.assertIn("25.00 USDC for a 20.00 USDC", verifier.verify_price_ladder("w1-b9999", d))
 
     def test_record_must_match_the_chain(self):
         d = {"settlement": settlement(100, 2, 1.0)}

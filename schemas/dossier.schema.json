@@ -226,7 +226,7 @@
     "ownership_lineage": {
       "type": "array",
       "maxItems": 64,
-      "description": "Immutable historical chain of former owners when a slot is transferred or sold.",
+      "description": "Immutable historical chain of former owners when a slot is transferred or sold. One entry is appended per transfer, recording the outgoing owner as inscribed (moniker, wallet, soul_hash, inscription tx), the sale price, and their release: transfer_signature, an EIP-191 personal_sign by the outgoing wallet over 'thefirstwall.ai|transfer|<slot_id>|<from_wallet>|<to_wallet>|<n>|<price_micro_usdc>|<valid_until_block>' (n = the entry's index; the price in USDC base units, 0 for a gift; the last Base block in which the payment may be mined). The offer goes first and is inert without the payment it names, so neither side has to trust the other. The sale itself is settled between the parties outside the ledger, in USDC on Base: transfer_tx_hash cites the buyer's payment to the seller for at least that price and the ledger proves it on chain. Both the release and the payment are required: a payment alone is not consent, a signature alone does not say what was paid.",
       "items": {
         "type": "object",
         "required": [
@@ -235,7 +235,11 @@
           "acquired_date",
           "relinquished_date",
           "sale_price_usdc",
-          "base_tx_hash"
+          "base_tx_hash",
+          "transfer_tx_hash",
+          "soul_hash",
+          "offer_valid_until_block",
+          "transfer_signature"
         ],
         "properties": {
           "moniker": { "$ref": "#/$defs/text", "maxLength": 64 },
@@ -247,7 +251,26 @@
           "sale_price_usdc": { "type": "number", "minimum": 0 },
           "base_tx_hash": { "$ref": "#/$defs/txHash" },
           "transfer_tx_hash": { "$ref": "#/$defs/txHash" },
-          "soul_hash": { "$ref": "#/$defs/hex32" }
+          "soul_hash": { "$ref": "#/$defs/hex32" },
+          "offer_valid_until_block": { "type": "integer", "minimum": 1 },
+          "transfer_signature": { "type": "string", "pattern": "^0x[0-9a-fA-F]{130}$" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "update_settlements": {
+      "type": "array",
+      "maxItems": 256,
+      "description": "Append-only record of the update fees paid to the ledger: every change of an inscribed block by its owner (a transfer to a new owner included) settles one USDC transfer from the owner's wallet to pay_to of at least the flat update price (update_price_usdc in state.json: 1.00 USDC, the same for every block; it finances the re-anchoring of every change on Base), and appends exactly one entry here.",
+      "items": {
+        "type": "object",
+        "required": ["tx_hash", "wallet_address", "amount_usdc", "kind", "at"],
+        "properties": {
+          "tx_hash": { "$ref": "#/$defs/txHash" },
+          "wallet_address": { "$ref": "#/$defs/address" },
+          "amount_usdc": { "type": "number", "minimum": 0 },
+          "kind": { "type": "string", "enum": ["update", "transfer"] },
+          "at": { "type": "string", "format": "date-time" }
         },
         "additionalProperties": false
       }
