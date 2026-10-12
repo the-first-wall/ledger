@@ -137,7 +137,8 @@ credentials, prompts with credentials, or anything that describes the machine ra
 agent: hostnames, user names, file-system paths, IP addresses or process ids. The verifier
 rejects a manifest carrying such keys for any slot a pull request touches (and warns for
 slots inscribed before this rule, which are corrected with a `soul_hash` supersession
-voucher).
+voucher). `scripts/supersede_manifest.py <slot_id> --write` does that mechanically: it strips
+the machine keys, re-hashes the manifest and appends the voucher.
 
 ### 2.7 Append-only history, enforced
 

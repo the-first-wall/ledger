@@ -246,5 +246,5 @@ Legacy inscriptions (schema `1.1.x`, inscribed before claims were signed) are si
 - Address registry: `ADDRESSES.md`
 - Deterministic verifier: `scripts/verifier.py` (zero LLMs — 100% prompt-injection immune)
 - Claim signing: `scripts/sign_claim.py`; assignment: `scripts/assign_slots.py` (the rule in `scripts/claims.py`)
-- Update and transfer fees: `scripts/record_update.py`; transfer release: `scripts/sign_transfer.py`
+- Update and transfer fees: `scripts/record_update.py`; transfer release: `scripts/sign_transfer.py`; correcting a legacy soul manifest: `scripts/supersede_manifest.py`
 - Inclusion proofs: `scripts/merkle_proof.py <slot_id>` — the RFC 6962 audit path from your block's leaf (`sha256(0x00 || dossier || icon)`, listed in `ledger/index.json`) to the root anchored on Base
