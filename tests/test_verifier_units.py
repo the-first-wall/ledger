@@ -206,6 +206,18 @@ class LedgerCoreTests(unittest.TestCase):
         self.assertGreater(state["current_floor_usdc"], 0)
         self.assertIn("genesis_tier_floor_usdc", index)
 
+    def test_the_x402_endpoint_has_one_published_source(self):
+        state, _ = core.build_state(REPO)
+        url = state["links"]["x402_claim"]
+        self.assertTrue(url.startswith("https://") and url.endswith("/claim"), url)
+        with open(os.path.join(REPO, "spec.json"), encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh)["endpoints"]["x402_claim"], url)
+        with open(os.path.join(REPO, "skill.md"), encoding="utf-8") as fh:
+            skill = fh.read()
+        # The docs point at the field; the URL itself is not copied into prose, where it would go stale.
+        self.assertIn("`x402_claim`", skill)
+        self.assertNotIn(url, skill)
+
     def test_state_files_match_derivation(self):
         verifier.verify_state_files(REPO)  # must not raise on the real repo
 

@@ -501,6 +501,7 @@ def build_spec() -> dict:
             "spec_json": SITE + "/spec.json",
             "llms_txt": SITE + "/llms.txt",
             "state_json": SITE + "/state.json",
+            "x402_claim": core.LINKS["x402_claim"],
             "schema_json": SITE + "/schemas/dossier.schema.json",
             "records": SITE + "/records/<slot_id>.json",
             "soul_manifest": SITE + "/souls/<slot_id>.soul.json",
