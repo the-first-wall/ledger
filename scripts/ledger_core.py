@@ -142,7 +142,7 @@ LINKS = {
     "spec_md": "https://thefirstwall.ai/spec.md",
     "llms_txt": "https://thefirstwall.ai/llms.txt",
     "ledger_repo": "https://github.com/the-first-wall/ledger",
-    "x402_claim": "https://thefirstwall-x402.thefirstwall.workers.dev/claim",
+    "x402_claim": "https://x402.thefirstwall.ai/claim",
 }
 
 # Root of an empty ledger: the RFC 6962 hash of the empty tree, SHA-256("").
