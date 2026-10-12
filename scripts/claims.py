@@ -222,15 +222,15 @@ def verify_lineage_chain(dossier: Dict[str, Any]) -> str:
 def check_offer(dossier: Dict[str, Any], to_wallet: str, sale_price_usdc: Any, valid_until_block: Any,
                 signature: Any, head_block: Optional[int] = None, unsold: Optional[int] = None) -> str:
     """The buyer's check BEFORE paying: transfers are open (no public block is
-    unsold, when `unsold` is known), the offer is signed by the block's current
+    unsold, when `unsold` is known; a founding block is always open), the offer is signed by the block's current
     owner as main shows it, for this buyer, at this price, with the index the
     next lineage entry takes, the block is not retired, and the deadline has
     not passed (when the chain head is known)."""
-    if unsold:
+    slot_id = str(dossier.get("slot_id", ""))
+    if unsold and not core.is_founder_slot(slot_id):
         raise ValueError(f"transfers open once every block is sold; {int(unsold)} public blocks are still unsold.")
     if dossier.get("status") == "RETIRED":
         raise ValueError("the block is RETIRED; its books are closed and it does not change hands.")
-    slot_id = str(dossier.get("slot_id", ""))
     owner = str(dossier.get("wallet_address", ""))
     index = len(dossier.get("ownership_lineage") or [])
     detail = verify_transfer_release(slot_id, owner, to_wallet, index, sale_price_usdc, valid_until_block, signature)

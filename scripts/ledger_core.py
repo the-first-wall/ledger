@@ -89,6 +89,15 @@ GENESIS_TIER_FLOOR_USDC = 1.00
 RESERVED_SLOT_NUMBERS = list(range(2, 11))  # -> #0002 through #0010
 RESERVED_SLOTS = [f"w1-b{n:04d}" for n in RESERVED_SLOT_NUMBERS]
 
+# The ten founding blocks: #0001 (genesis) and the reserved #0002–#0010. They are
+# not for sale, so the sell-out gate on transfers (below) does not apply to them:
+# a founder can hand a block to a partner, or move it to a fresh wallet (key
+# rotation, docs/runbooks/wallet-rotation.md), at any time. The gate stops a cheap
+# PUBLIC block being passed from bot to bot; a founding block is never one. Every
+# other transfer rule (the seller's release, the buyer's payment, the 5.00 USDC
+# transfer fee, the lineage) still applies.
+FOUNDER_SLOT_NUMBERS = list(range(1, 11))  # -> #0001 through #0010
+
 # Deterministic pricing ladder. The tier is derived purely from slot count;
 # it is never hand-edited. See skill.md / spec.md for the public description.
 # price_usdc buys the block (the claim); the tier is set by how many blocks
@@ -114,7 +123,9 @@ PRICING_TIERS: List[Dict[str, Any]] = [
 # The sale itself is settled between buyer and seller outside the ledger; these
 # fees are all the ledger is paid. Transfers open only once every public block
 # is sold (unsold_slots == 0): until then a cheap block would be passed from
-# bot to bot and every bot would sit in the history of one block.
+# bot to bot and every bot would sit in the history of one block. The ten
+# founding blocks (FOUNDER_SLOT_NUMBERS) are exempt: they are never sold at the
+# public price.
 UPDATE_PRICE_USDC = 0.50
 UPDATE_PRICE_RATIONALE = ("finances the wall: every change is re-anchored on Base (gas), re-verified and "
                           "re-published; kept low so the wall stays up to date")
@@ -303,6 +314,20 @@ def unsold_slots(claimed_numbers) -> int:
 def unsold_slots_in(base_dir: str) -> int:
     slot_dir = ledger_w1_dir(base_dir)
     return unsold_slots({slot_number(f[:-5]) for f in list_slot_files(slot_dir)})
+
+
+def is_founder_slot(slot_id: str) -> bool:
+    """One of the ten founding blocks, #0001 through #0010."""
+    try:
+        return slot_number(slot_id) in FOUNDER_SLOT_NUMBERS
+    except (ValueError, TypeError):
+        return False
+
+
+def transfers_open_for(slot_id: str, unsold: int) -> bool:
+    """May this block change hands now? Every block once every public block is
+    sold; a founding block at any time."""
+    return unsold == 0 or is_founder_slot(slot_id)
 
 
 def current_tier(base_dir: str) -> Dict[str, Any]:
@@ -559,6 +584,7 @@ def build_state(base_dir: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         "unsold_slots": unsold,
         "reserved_slots": reserved_unclaimed,
         "reserved_slot_range": [min(RESERVED_SLOT_NUMBERS), max(RESERVED_SLOT_NUMBERS)],
+        "founder_slot_range": [min(FOUNDER_SLOT_NUMBERS), max(FOUNDER_SLOT_NUMBERS)],
         "current_floor_usdc": tier["price_usdc"],
         "update_price_usdc": UPDATE_PRICE_USDC,
         "transfer_price_usdc": TRANSFER_PRICE_USDC,

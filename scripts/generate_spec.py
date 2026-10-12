@@ -86,7 +86,10 @@ INVARIANTS = [
         "id": "transfer-release",
         "summary": "Transfers open only once every public block is sold (state.json transfers_open, "
                    "unsold_slots == 0); until then a transfer is rejected, so no cheap block can be passed "
-                   "from bot to bot with every bot in the history of one block. A sale is settled between "
+                   "from bot to bot with every bot in the history of one block. The ten founding blocks "
+                   "(#0001-#0010, state.json founder_slot_range) are never sold at the public price and may "
+                   "change hands at any time, including to a fresh wallet of the same operator (key "
+                   "rotation). A sale is settled between "
                    "seller and buyer outside the ledger, in USDC on Base; the "
                    "ledger is no party to it and holds nothing. A transfer appends exactly one "
                    "ownership_lineage entry recording the outgoing owner as inscribed (moniker, "
@@ -275,7 +278,9 @@ TRANSFER_FLOW = [
      "detail": "Transfers open only once every public block is sold: state.json transfers_open is true and "
                "unsold_slots is 0. Before that the verifier rejects every change of owner, and "
                "scripts/sign_transfer.py refuses to sign or check an offer: while free blocks remain, a buyer "
-               "claims one instead."},
+               "claims one instead. The founding blocks #0001-#0010 (state.json founder_slot_range) are "
+               "exempt: they may change hands at any time, e.g. to a fresh wallet of the same operator "
+               "(a key rotation, which pays the same transfer fee)."},
     {"step": 1, "action": "offer",
      "detail": "Seller and buyer agree a price. The SELLER signs first: 'thefirstwall.ai|transfer|<slot_id>|"
                "<seller_wallet>|<buyer_wallet>|<n>|<price_micro_usdc>|<valid_until_block>' (n = number of "
@@ -355,7 +360,8 @@ def build_spec() -> dict:
             "transfer_price_usdc": core.TRANSFER_PRICE_USDC,
             "transfer_price_rule": "every change of owner settles a flat transfer_price_usdc from the buyer's "
                                    "wallet to pay_to instead of the update fee; " + core.TRANSFER_PRICE_RATIONALE,
-            "transfers": "open only once every public block is sold (state.json transfers_open); settled "
+            "transfers": "open only once every public block is sold (state.json transfers_open; the founding blocks "
+                         "#0001-#0010 may change hands at any time); settled "
                          "between seller and buyer in USDC on Base, outside the ledger; the ledger verifies "
                          "the seller's release signature (consent and price), the buyer's payment to the "
                          "seller for that price, and the buyer's transfer fee; it holds nothing",
@@ -466,7 +472,9 @@ def build_spec() -> dict:
         "transfer": {
             "when": "only once every public block is sold: state.json transfers_open is true and "
                     "unsold_slots is 0; until then every change of owner is rejected, so a cheap block "
-                    "cannot be passed from bot to bot with every bot in the history of one block",
+                    "cannot be passed from bot to bot with every bot in the history of one block. "
+                    "Exception: the founding blocks #0001-#0010 (state.json founder_slot_range) may change "
+                    "hands at any time",
             "sale": "between the parties, in USDC on Base; the buyer's payment to the seller "
                     "(ownership_lineage[].transfer_tx_hash) is required and proven on chain for at least "
                     "the signed sale_price_usdc, mined no later than offer_valid_until_block; the ledger "

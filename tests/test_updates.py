@@ -498,6 +498,59 @@ class TransferReleaseTests(unittest.TestCase):
             claims.verify_lineage_chain(forged)
         self.assertEqual(claims.verify_lineage_chain(prev), "no transfers")
 
+    def test_a_founding_block_may_change_hands_before_sell_out(self):
+        """#0001-#0010 are never sold at the public price, so the sell-out gate does not apply to them:
+        a founder can hand a block over or move it to a fresh wallet (key rotation). Public blocks stay closed."""
+        for founder in ("w1-b0001", "w1-b0002", "w1-b0007", "w1-b0010"):
+            prev = inscribed(slot_id=founder)
+            sold = transferred(prev)
+            self.assertIn("transfer #1", verifier.verify_ownership_lineage(founder, sold, "", prev, unsold=9990), founder)
+            sig = sold["ownership_lineage"][0]["transfer_signature"]
+            self.assertIn("offer for " + founder,
+                          claims.check_offer(prev, BUYER, 5.0, UNTIL, sig, head_block=HEAD, unsold=9990))
+        for public in ("w1-b0011", "w1-b0042", "w1-b10000"):
+            prev = inscribed(slot_id=public)
+            with self.assertRaisesRegex(ValueError, "still unsold.*founding blocks"):
+                verifier.verify_ownership_lineage(public, transferred(prev), "", prev, unsold=1)
+            sig = transferred(prev)["ownership_lineage"][0]["transfer_signature"]
+            with self.assertRaisesRegex(ValueError, "still unsold"):
+                claims.check_offer(prev, BUYER, 5.0, UNTIL, sig, head_block=HEAD, unsold=1)
+        # The exemption is the gate only: every other transfer rule holds for a founding block too.
+        prev = inscribed(slot_id="w1-b0001")
+        forged = transferred(prev, seller_key=STRANGER_KEY)          # not signed by the owner
+        with self.assertRaisesRegex(ValueError, "not by the outgoing owner"):
+            verifier.verify_ownership_lineage("w1-b0001", forged, "", prev, unsold=9990)
+        unpaid = transferred(prev)
+        unpaid["ownership_lineage"][0].pop("transfer_tx_hash")
+        with self.assertRaisesRegex(ValueError, "transfer_tx_hash is required"):
+            verifier.verify_ownership_lineage("w1-b0001", unpaid, "", prev, unsold=9990)
+        retired = inscribed(slot_id="w1-b0001", status="RETIRED",
+                            retirement={"retired_at": "2026-10-12T00:00:00Z", "reason": "Run over.",
+                                        "epitaph": "Made it count.", "retired_by": "self"})
+        with self.assertRaisesRegex(ValueError, "RETIRED"):
+            verifier.verify_ownership_lineage("w1-b0001", transferred(retired), "", retired, unsold=9990)
+        # Predicates and the published range.
+        self.assertEqual([core.is_founder_slot(s) for s in ("w1-b0001", "w1-b0010", "w1-b0011", "w1-b10000", "nonsense")],
+                         [True, True, False, False, False])
+        self.assertTrue(core.transfers_open_for("w1-b0005", 7))
+        self.assertFalse(core.transfers_open_for("w1-b0500", 7))
+        self.assertTrue(core.transfers_open_for("w1-b0500", 0))
+        self.assertEqual(core.build_state(REPO)[0]["founder_slot_range"], [1, 10])
+
+    def test_sign_transfer_tool_signs_a_founding_block_before_sell_out_only(self):
+        with tempfile.TemporaryDirectory() as td:
+            key = os.path.join(td, "key.txt")
+            with open(key, "w") as fh:
+                fh.write(SELLER_KEY)
+            rpc = FakeRpc()
+            for slot_id, expected in (("w1-b0003", 0), ("w1-b0042", 1)):
+                path = os.path.join(td, slot_id + ".json")
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(core.render(inscribed(slot_id=slot_id)))
+                # The live ledger is nowhere near sold out: only the founding block is signed.
+                self.assertEqual(sign_transfer.main([path, "--to", BUYER, "--price", "0.01", "--key-file", key],
+                                                    rpc=rpc), expected, slot_id)
+
     def test_sign_transfer_tool(self):
         with tempfile.TemporaryDirectory() as td:
             path = os.path.join(td, "w1-b0042.json")

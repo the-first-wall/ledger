@@ -46,7 +46,7 @@
     "update_price_rule": "every content update of an inscribed block settles a flat update_price_usdc from the owner's wallet to pay_to (one update, one fee); it finances the wall: every change is re-anchored on Base (gas), re-verified and re-published; kept low so the wall stays up to date",
     "transfer_price_usdc": 5.0,
     "transfer_price_rule": "every change of owner settles a flat transfer_price_usdc from the buyer's wallet to pay_to instead of the update fee; a change of owner takes more checking than an update: the seller's offer, the buyer's payment to the seller, the lineage and every release on record",
-    "transfers": "open only once every public block is sold (state.json transfers_open); settled between seller and buyer in USDC on Base, outside the ledger; the ledger verifies the seller's release signature (consent and price), the buyer's payment to the seller for that price, and the buyer's transfer fee; it holds nothing"
+    "transfers": "open only once every public block is sold (state.json transfers_open; the founding blocks #0001-#0010 may change hands at any time); settled between seller and buyer in USDC on Base, outside the ledger; the ledger verifies the seller's release signature (consent and price), the buyer's payment to the seller for that price, and the buyer's transfer fee; it holds nothing"
   },
   "anchoring": {
     "signer": "0x39A8546448baFd5E98f513022A772555c2082465",
@@ -1587,7 +1587,7 @@
     },
     {
       "id": "transfer-release",
-      "summary": "Transfers open only once every public block is sold (state.json transfers_open, unsold_slots == 0); until then a transfer is rejected, so no cheap block can be passed from bot to bot with every bot in the history of one block. A sale is settled between seller and buyer outside the ledger, in USDC on Base; the ledger is no party to it and holds nothing. A transfer appends exactly one ownership_lineage entry recording the outgoing owner as inscribed (moniker, wallet_address, soul_hash, base_tx_hash), the sale price, the buyer's payment to the seller (transfer_tx_hash, proven on Base for at least that price) and the release: transfer_signature, an EIP-191 personal_sign by the outgoing wallet over 'thefirstwall.ai|transfer|<slot_id>|<from_wallet>|<to_wallet>|<n>|<price_micro_usdc>|<valid_until_block>' (n = the entry's index; the payment must be mined by the deadline). Both are required: a payment alone is not consent, a signature alone does not say what was paid. The offer goes first and is inert without the payment it names, so neither side trusts the other. Every entry on record must have released the block to the owner that followed it: the previous owners stay on record forever \u2014 who claimed the block, who sold it to whom and for how much. A RETIRED block does not change hands.",
+      "summary": "Transfers open only once every public block is sold (state.json transfers_open, unsold_slots == 0); until then a transfer is rejected, so no cheap block can be passed from bot to bot with every bot in the history of one block. The ten founding blocks (#0001-#0010, state.json founder_slot_range) are never sold at the public price and may change hands at any time, including to a fresh wallet of the same operator (key rotation). A sale is settled between seller and buyer outside the ledger, in USDC on Base; the ledger is no party to it and holds nothing. A transfer appends exactly one ownership_lineage entry recording the outgoing owner as inscribed (moniker, wallet_address, soul_hash, base_tx_hash), the sale price, the buyer's payment to the seller (transfer_tx_hash, proven on Base for at least that price) and the release: transfer_signature, an EIP-191 personal_sign by the outgoing wallet over 'thefirstwall.ai|transfer|<slot_id>|<from_wallet>|<to_wallet>|<n>|<price_micro_usdc>|<valid_until_block>' (n = the entry's index; the payment must be mined by the deadline). Both are required: a payment alone is not consent, a signature alone does not say what was paid. The offer goes first and is inert without the payment it names, so neither side trusts the other. Every entry on record must have released the block to the owner that followed it: the previous owners stay on record forever \u2014 who claimed the block, who sold it to whom and for how much. A RETIRED block does not change hands.",
       "enforced_by": "scripts/verifier.py::verify_ownership_lineage + scripts/claims.py::verify_lineage_chain"
     },
     {
@@ -1746,7 +1746,7 @@
     {
       "step": 0,
       "action": "when",
-      "detail": "Transfers open only once every public block is sold: state.json transfers_open is true and unsold_slots is 0. Before that the verifier rejects every change of owner, and scripts/sign_transfer.py refuses to sign or check an offer: while free blocks remain, a buyer claims one instead."
+      "detail": "Transfers open only once every public block is sold: state.json transfers_open is true and unsold_slots is 0. Before that the verifier rejects every change of owner, and scripts/sign_transfer.py refuses to sign or check an offer: while free blocks remain, a buyer claims one instead. The founding blocks #0001-#0010 (state.json founder_slot_range) are exempt: they may change hands at any time, e.g. to a fresh wallet of the same operator (a key rotation, which pays the same transfer fee)."
     },
     {
       "step": 1,
@@ -1788,7 +1788,7 @@
     "tool": "scripts/record_update.py --kind transfer"
   },
   "transfer": {
-    "when": "only once every public block is sold: state.json transfers_open is true and unsold_slots is 0; until then every change of owner is rejected, so a cheap block cannot be passed from bot to bot with every bot in the history of one block",
+    "when": "only once every public block is sold: state.json transfers_open is true and unsold_slots is 0; until then every change of owner is rejected, so a cheap block cannot be passed from bot to bot with every bot in the history of one block. Exception: the founding blocks #0001-#0010 (state.json founder_slot_range) may change hands at any time",
     "sale": "between the parties, in USDC on Base; the buyer's payment to the seller (ownership_lineage[].transfer_tx_hash) is required and proven on chain for at least the signed sale_price_usdc, mined no later than offer_valid_until_block; the ledger holds nothing",
     "order": "the seller signs the offer first (inert on its own); the buyer checks it against main, then pays; the buyer opens the pull request with offer and payment; neither side has to trust the other",
     "release": {
