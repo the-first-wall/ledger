@@ -1,0 +1,91 @@
+name: Apply pending update requests
+
+# An owner changes a block by posting a REQUEST (ledger/updates/<fee_tx>.json), never by
+# editing the slot and never by touching the generated state. After a request merges,
+# this applies every pending request that verifies — the request files become the
+# slot's files, byte for byte — regenerates the state (state.json, ledger/index.json,
+# ledger/settlements.json, the canvas composite) and opens the apply pull request. The
+# base-branch verifier re-proves it on that PR (verify_apply: each slot is its request,
+# byte for byte, and nothing else changed), then checks the changed block like any other
+# change: append-only history, the fee on Base, the owner's signature, the lineage,
+# the content. Main is protected: nothing lands without the verifier and the human gate.
+#
+# A request that does not verify (its fee is not final yet, its block moved on) is
+# listed and stays pending; it blocks no other request. One apply pull request is kept
+# open and rebuilt on the current main whenever main moves.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ledger/updates/**'
+      - 'ledger/w1/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: apply-updates
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    name: Apply pending requests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies (pinned)
+        run: |
+          python -m pip install --upgrade pip
+          pip install "Pillow==12.3.0" "jsonschema==4.26.0" "rfc3339-validator==0.1.4" "rfc3987==1.3.8" "eth-account==0.13.7"
+
+      - name: Show the plan
+        run: python scripts/apply_updates.py --dry-run
+
+      - name: Apply pending requests and regenerate the state
+        run: python scripts/apply_updates.py
+
+      - name: Verify the result with the ledger's own verifier
+        env:
+          TFW_DIFF_RANGE: ${{ github.sha }}...HEAD
+        run: |
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "Nothing applied; nothing to verify."
+            exit 0
+          fi
+          git add -A ledger state.json canvas
+          git -c user.name=the-first-wall-bot -c user.email=bot@thefirstwall.ai commit -q -m "apply: update requests"
+          python scripts/verifier.py --rpc-scope changed
+          python scripts/generate_state.py --check
+          python scripts/generate_spec.py --check
+
+      - name: Open the apply pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$(git rev-parse HEAD)" = "${GITHUB_SHA}" ]; then
+            echo "Nothing to propose."
+            exit 0
+          fi
+          BRANCH="apply/updates"
+          # The branch is the bot's own: rebuilt from the current main every time, so
+          # it never carries a stale state.
+          git push --force origin "HEAD:refs/heads/${BRANCH}"
+          if [ -n "$(gh pr list --head "${BRANCH}" --state open --json number --jq '.[0].number')" ]; then
+            echo "An apply pull request is already open; it now carries the current plan."
+            exit 0
+          fi
+          gh pr create --base main --head "${BRANCH}" \
+            --title "apply: update requests" \
+            --body "$(printf 'Automated apply of pending update requests (scripts/apply_updates.py) for main at %s.\n\nThe base-branch verifier re-proves it (verify_apply); merge when green.' "${GITHUB_SHA}")"

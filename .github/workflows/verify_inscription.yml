@@ -1,9 +1,11 @@
 name: Verify Inscription & Merkle State
 
 # Verification ALWAYS runs with the verifier, schema and tests from the base
-# branch. A pull request contributes only its ledger data (dossiers, icons, soul
-# manifests, generated state); nothing executable is ever taken from the PR, so
-# a claim PR cannot change the rules it is checked against. Infrastructure
+# branch. A pull request contributes only its ledger data (a claim, an update
+# request; the bot's assignment and apply also carry slots and generated state);
+# nothing executable is ever taken from the PR, so a claim PR cannot change the
+# rules it is checked against. An owner's PR never contains a slot or generated
+# state: the verifier's containment rule refuses it. Infrastructure
 # changes (scripts/, schemas/, .github/) ride in their own PRs, where the
 # containment rule forbids touching a slot at the same time; for those the
 # base code verifies the base data and the containment rule only, and the

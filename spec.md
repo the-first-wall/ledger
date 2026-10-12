@@ -203,11 +203,16 @@ A slot id is assigned by the system (§2.13); a claimant never names one.
 
 CI always runs the verifier, schema and tests **from the base branch** and overlays only the
 pull request's ledger data (`ledger/`, `state.json`, `canvas/`). A pull request is exactly one
-of four things: a **claim** (the three files of one settlement transaction, all added, nothing
-else), an **assignment** (the placed claims' files removed, the added slots' files, the
-generated state), an **update of one existing slot** (its three files and the generated state)
-or **infrastructure**. A new slot is never added directly, a slot file is never deleted, a
-merged claim is never edited. Infrastructure changes ride in their own pull requests, where the
+of six things: a **claim** (the three files of one settlement transaction, all added, nothing
+else), an **update request** (the files of one fee transaction, `ledger/updates/<fee_tx>.json`
+and, when they change, `.webp` and `.soul.json`, all added, nothing else; §2.18), the bot's
+**assignment** (the placed claims' files removed, the added slots' files, the generated state),
+the bot's **apply** (the applied requests' files removed, the changed slots' files, the
+generated state), a **withdrawal** (pending requests removed, nothing else) or
+**infrastructure**. Nobody outside the bot touches a slot or the generated state (`state.json`,
+`ledger/index.json`, `ledger/settlements.json`, the canvas composite): a new slot is never added
+directly, an existing slot is never changed directly, a slot file is never deleted, a merged
+claim or request is never edited. Infrastructure changes ride in their own pull requests, where the
 base-branch run verifies the base data and the containment rule only and a separate self-check
 runs the pull request's own code against its own data. Every recorded anchor must name the
 registered signer and carry `reckoning|<root>`; the latest anchor is proven on Base on every run.
@@ -327,8 +332,8 @@ entry to `update_settlements[]`:
 ```
 
 `kind` is `"transfer"` when the change is a change of owner and `"update"` otherwise. The
-verifier enforces: the array only grows; every entry pays at least the price of its kind; a PR that
-changes an inscribed slot appends exactly one entry (none: rejected; two: rejected); the entry
+verifier enforces: the array only grows; every entry pays at least the price of its kind; a change
+to an inscribed slot (an update request, §2.18) appends exactly one entry (none: rejected; two: rejected); the entry
 is paid by the owner after the change and its `kind` matches the change; the fee transaction is
 its own (never `base_tx_hash`, `patron.tx_hash`, a sale hash or another fee) and settles exactly
 one slot (§2.9); on the pull request it is proven on Base with the recorded amount, and the
@@ -421,3 +426,43 @@ block with a hash and resolves the hash back to the record. It adds no object an
   names, the audit path and the anchor), the exact bytes behind each id it has published, and
   `/ids.json` (the append-only index). A superseded id keeps resolving, marked as superseded by
   the current one. The ledger itself needs no new file: `ledger/index.json` is the id index.
+
+### 2.18 Update requests and the apply (nobody outside touches the state)
+
+The generated state (`state.json`, `ledger/index.json`, `ledger/settlements.json` and the canvas
+composite) is a function of the slots; a person who commits it adds nothing the generator does
+not, conflicts with every other change that lands first, and can only get it wrong. It is
+therefore written by the bot and by no one else, and the same goes for the slot files: an owner
+**requests** a change, the system **applies** it. The claim (§2.13) already works this way; an
+update (§2.15) and a transfer (§2.16) now do too.
+
+An owner's pull request adds exactly the files of ONE request, named by the transaction that paid
+for it (the update fee, or the transfer fee when the block changes hands):
+
+| File | Content |
+| :-- | :-- |
+| `ledger/updates/<fee_tx_hash>.json` | the slot's complete new dossier: the same `slot_id`, `update_settlements[]` grown by exactly one entry (that fee), for a transfer the new `wallet_address` and `ownership_lineage[]` entry |
+| `ledger/updates/<fee_tx_hash>.webp` | the new icon; only when it changes |
+| `ledger/updates/<fee_tx_hash>.soul.json` | the new soul manifest; only when it changes |
+
+`scripts/post_update.py <slot_id>` writes them from the owner's edited slot files and puts the
+slot's own files back as `main` has them.
+
+**A request is verified as the block it would become.** The verifier lays the request over a
+throw-away copy of the ledger (the slot's files replaced, the request removed, the generated state
+regenerated) and runs every check a change of that block goes through on the copy — schema, the
+claim signature, append-only history (§2.7), the fee proven on Base (§2.15), the release and the
+payment of a transfer (§2.16), the content screen — and the request's own identity: it is named
+by its fee transaction, it names an inscribed block, and it is the only request waiting for that
+block. One request per block waits at a time, so there is never a question which comes first.
+
+**The apply.** After a request merges, `scripts/apply_updates.py` (CI, landing through its own bot
+pull request) makes each pending request that still verifies the slot's files, byte for byte,
+removes it and regenerates the state. Each request is tried first on a copy and only the ones that
+verify are applied, each on top of the ones accepted before it; a request that does not (its fee
+is not yet final, its block moved on) stays pending, blocks no other block, and is cleared by a
+withdrawal. On the apply pull request the verifier proves that every removed request was pending on
+`main`, that each changed slot is its request byte for byte, that an icon or manifest changed only
+where the request carried one, that no block changed without a request naming it and none took more
+than one; then the changed slot goes through the checks above once more. Nobody — the bot included —
+can change a block in any way but the one its owner posted.

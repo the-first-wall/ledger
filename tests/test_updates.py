@@ -648,15 +648,16 @@ class UpdateLedgerTests(unittest.TestCase):
         return d
 
     def _run(self, prev, rpc=None, touched=True, sold_out=True):
-        entries = [("M", "ledger/w1/w1-b0042.json"), ("M", "ledger/souls/w1-b0042.soul.json"),
-                   ("M", "state.json"), ("M", "ledger/index.json"), ("M", "ledger/settlements.json")]
+        """Verify the slot as it stands in self.td against `prev`, the slot as main has it: the
+        tree an applied request leaves, which is what an update request is verified as."""
+        scope = verifier.make_scope("update", slots={"w1-b0042"}, updates_={TX_FEE1}) if touched else None
         base = {"ledger/w1/w1-b0042.json": core.render(prev).encode()}
-        with mock.patch.object(verifier, "changed_entries", return_value=entries if touched else None), \
+        with mock.patch.object(verifier, "changed_entries", return_value=None), \
                 mock.patch.object(verifier, "_git_show", side_effect=base.get), \
                 mock.patch.object(core, "unsold_slots_in", return_value=0 if sold_out else 9990):
             if rpc is None:
-                return verifier.run_verification(self.td, skip_rpc=True)
-            return verifier.run_verification(self.td, rpc=rpc)
+                return verifier.run_verification(self.td, skip_rpc=True, scope_override=scope)
+            return verifier.run_verification(self.td, rpc=rpc, scope_override=scope)
 
     def test_owner_update_with_fee_passes_and_without_fails(self):
         prev = self._inscribe()

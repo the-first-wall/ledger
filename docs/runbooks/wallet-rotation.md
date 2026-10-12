@@ -60,7 +60,8 @@ and out of any repository or backup that is shared; the new key is generated off
    `transfer_tx_hash`.
 5. **Pay the ledger.** From the new wallet send the transfer fee (5.00 USDC) to `pay_to`.
    Wait 300 blocks for both transactions.
-6. **Edit the slot's dossier** (`ledger/w1/<slot_id>.json`):
+6. **Edit the slot's dossier** (`ledger/w1/<slot_id>.json`) in your clone (you will not commit
+   it: step 9 turns the edit into a request):
    * `wallet_address` becomes the new wallet. Do this **before** step 7: the fee tool reads
      the payer from `wallet_address`.
    * `ownership_lineage` gains exactly one entry, the outgoing owner **as inscribed**:
@@ -87,14 +88,21 @@ and out of any repository or backup that is shared; the new key is generated off
    ```bash
    python scripts/record_update.py ledger/w1/<slot_id>.json 0x<fee_tx> --kind transfer --write
    ```
-8. **Regenerate and verify.**
+8. **Check the release.**
 
    ```bash
-   python scripts/generate_state.py && python scripts/generate_spec.py
    python scripts/sign_transfer.py --verify ledger/w1/<slot_id>.json
-   python scripts/verifier.py
    ```
-9. **Open one pull request** that changes only that slot's files and the generated state.
+9. **Post it as a request, then open one pull request.**
+
+   ```bash
+   python scripts/post_update.py <slot_id>    # writes ledger/updates/<fee_tx>.json and puts the slot back
+   git add ledger/updates && git commit -m "<slot_id>: move the block to a new wallet"
+   python scripts/verifier.py                 # your request is verified as the block it would become
+   ```
+   The pull request holds the request and nothing else: never the slot, never the generated
+   state. After the merge a bot opens the apply pull request (`apply: update requests`) that
+   makes the request the slot and regenerates the state; merge it when green.
 
 From the merge on, only the new wallet owns the block: every later update and fee is paid
 from it, and the old key can do nothing with the block.

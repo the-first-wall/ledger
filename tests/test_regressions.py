@@ -377,32 +377,43 @@ class ScopeTests(unittest.TestCase):
     def test_slot_plus_infrastructure_rejected(self):
         entries = [("A", "ledger/w1/w1-b0011.json"), ("A", "ledger/w1/w1-b0011.webp"),
                    ("M", "scripts/verifier.py")]
-        with self.assertRaisesRegex(ValueError, "scripts/verifier.py"):
+        with self.assertRaises(ValueError):
             verifier.check_scope(entries)
 
-    def test_slot_plus_workflow_or_schema_rejected(self):
+    def test_request_plus_infrastructure_rejected(self):
+        tx = "0x" + "f" * 64
+        entries = [("A", f"ledger/updates/{tx}.json"), ("M", "scripts/verifier.py")]
+        with self.assertRaisesRegex(ValueError, "scripts/verifier.py"):
+            verifier.check_scope(entries)
         for stray in ("schemas/dossier.schema.json", ".github/workflows/verify_inscription.yml", "README.md"):
             with self.subTest(stray=stray), self.assertRaises(ValueError):
-                verifier.check_scope([("A", "ledger/w1/w1-b0011.json"), ("M", stray)])
+                verifier.check_scope([("A", f"ledger/updates/{tx}.json"), ("M", stray)])
 
-    def test_slot_update_plus_generated_state_accepted(self):
-        entries = [("M", "ledger/w1/w1-b0011.json"), ("M", "ledger/w1/w1-b0011.webp"),
-                   ("M", "ledger/souls/w1-b0011.soul.json"), ("M", "state.json"),
-                   ("M", "ledger/index.json"), ("M", "ledger/settlements.json")]
-        self.assertEqual(verifier.check_scope(entries), {"w1-b0011"})
-        self.assertEqual(verifier.scope_of(entries)["kind"], "slot")
+    def test_a_block_is_never_changed_directly(self):
+        # The owner's change is a request; the slot's files and the generated state are
+        # the bot's (an owner used to commit them, and conflict with every other owner).
+        for entries in (
+            [("M", "ledger/w1/w1-b0011.json")],
+            [("M", "ledger/w1/w1-b0011.json"), ("M", "ledger/w1/w1-b0011.webp"),
+             ("M", "ledger/souls/w1-b0011.soul.json"), ("M", "state.json"),
+             ("M", "ledger/index.json"), ("M", "ledger/settlements.json")],
+        ):
+            with self.subTest(entries=entries), self.assertRaisesRegex(ValueError, "never changed directly"):
+                verifier.check_scope(entries)
 
     def test_new_slot_added_directly_rejected(self):
         # A claimant never names a block (R-21): new inscriptions arrive as
         # claims and the assignment adds the slot files.
         entries = [("A", "ledger/w1/w1-b0011.json"), ("A", "ledger/w1/w1-b0011.webp"),
                    ("A", "ledger/souls/w1-b0011.soul.json"), ("M", "state.json")]
-        with self.assertRaisesRegex(ValueError, "never names a block"):
+        with self.assertRaisesRegex(ValueError, "never added directly"):
             verifier.check_scope(entries)
 
     def test_two_slots_rejected(self):
-        with self.assertRaisesRegex(ValueError, "more than ONE"):
+        with self.assertRaisesRegex(ValueError, "never added directly"):
             verifier.check_scope([("A", "ledger/w1/w1-b0011.json"), ("A", "ledger/w1/w1-b0012.json")])
+        with self.assertRaisesRegex(ValueError, "never changed directly"):
+            verifier.check_scope([("M", "ledger/w1/w1-b0011.json"), ("M", "ledger/w1/w1-b0012.json")])
 
     def test_deletions_rejected(self):
         for path in ("ledger/w1/w1-b0001.json", "ledger/w1/w1-b0001.webp", "ledger/souls/w1-b0001.soul.json"):

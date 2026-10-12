@@ -108,10 +108,15 @@ INVARIANTS = [
     {
         "id": "one-pr-one-change",
         "summary": "A pull request is exactly one of: a claim (the three files of ONE settlement "
-                   "transaction, all added), an assignment (removed claim files, the added slot files "
-                   "and the generated state), an update of ONE existing slot (its files and the "
-                   "generated state), or infrastructure. A slot file is never deleted; a merged "
-                   "claim is never edited; a new slot is never added directly.",
+                   "transaction, all added), an update request (the files of ONE fee transaction, "
+                   "ledger/updates/<fee_tx>.json and, when they change, .webp and .soul.json, all "
+                   "added), the bot's assignment (removed claim files, the added slot files and the "
+                   "generated state), the bot's apply (removed request files, the changed slot files "
+                   "and the generated state), a withdrawal (pending requests removed), or "
+                   "infrastructure. Nobody outside the bot touches a slot or the generated state "
+                   "(state.json, ledger/index.json, ledger/settlements.json, the canvas composite). A "
+                   "slot file is never deleted; a merged claim or request is never edited; a slot is "
+                   "never added or changed directly.",
         "enforced_by": "scripts/verifier.py::scope_of",
     },
     {
@@ -268,9 +273,18 @@ UPDATE_FLOW = [
                "Change what you came to change: living fields freely, sealed fields with a supersession "
                "voucher (spec.md 2.1), the icon with a voucher for 'icon'."},
     {"step": 4, "action": "submit",
-     "detail": "Open ONE pull request changing only this slot's files and the generated state "
-               "(python scripts/generate_state.py). One update, one fee: a PR without a new "
-               "update_settlements entry, or with two, fails."},
+     "detail": "Run python scripts/post_update.py <slot_id>: it writes your edit as ledger/updates/"
+               "<fee_tx_hash>.json (the slot's complete new dossier, named by the fee transaction; plus "
+               ".webp and .soul.json if the icon or manifest changed) and puts the slot's own files "
+               "back as main has them. Open ONE pull request containing the request and nothing else: "
+               "you never commit a slot and never touch the generated state. One update, one fee: a "
+               "request without a new update_settlements entry, or with two, fails. The verifier "
+               "checks it as the block it would become."},
+    {"step": 5, "action": "applied",
+     "detail": "After the merge the bot applies the request (scripts/apply_updates.py, a bot pull "
+               "request): your files become the slot's files byte for byte, the request is removed and "
+               "the generated state is regenerated; the verifier re-proves it. A block takes one "
+               "request at a time."},
 ]
 
 TRANSFER_FLOW = [
@@ -303,7 +317,8 @@ TRANSFER_FLOW = [
                "update_settlements entry of kind 'transfer' (scripts/record_update.py --kind transfer). That "
                "is all the ledger is paid for a sale."},
     {"step": 4, "action": "submit",
-     "detail": "The buyer opens ONE pull request: wallet_address becomes the buyer's; ownership_lineage gains "
+     "detail": "The buyer posts ONE update request (scripts/post_update.py <slot_id>; the bot applies it "
+               "after the merge): wallet_address becomes the buyer's; ownership_lineage gains "
                "exactly one entry with the outgoing owner's moniker, wallet_address, soul_hash and "
                "base_tx_hash as inscribed, acquired_date, relinquished_date, sale_price_usdc, transfer_tx_hash, "
                "offer_valid_until_block and transfer_signature; the buyer may rewrite the content, icon and "
@@ -322,7 +337,7 @@ def build_spec() -> dict:
 
     return {
         "spec": "thefirstwall/attestation",
-        "spec_version": "1.8",
+        "spec_version": "1.9",
         "title": "The First Wall — Attestation Specification",
         "description": "Machine-readable specification and validation invariants for inscriptions "
                        "on The First Wall (Wall 01). Companion to spec.md.",

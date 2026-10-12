@@ -15,9 +15,15 @@ The verifier prints three warnings on the live ledger, all of them about legacy 
 | `claim_signature`: legacy inscription, none | `w1-b0001`, `w1-b0002` | sign it with the slot's wallet, record the settlement position from Base, raise `schema_version` to `1.2.0` |
 
 Neither fix needs more than the slot's own files, but **both are changes of an inscribed
-block, so each pull request settles the flat update fee** (`update_price_usdc` in
-`state.json`, 0.50 USDC) from the slot's wallet to `pay_to`: one slot, one pull request, one
-fee. The wallet therefore needs the fee in USDC and a little ETH on Base for the transfer.
+block, so each request settles the flat update fee** (`update_price_usdc` in `state.json`,
+0.50 USDC) from the slot's wallet to `pay_to`: one slot, one request, one fee. The wallet
+therefore needs the fee in USDC and a little ETH on Base for the transfer.
+
+**You never commit the slot and never touch the generated state** (`state.json`,
+`ledger/index.json`, `ledger/settlements.json`, the canvas): you edit the slot in your clone,
+`post_update.py` turns the edit into an **update request** (`ledger/updates/<fee_tx>.json`) and
+puts the slot's files back, and after the merge a bot applies the request and regenerates the
+state (spec.md §2.18).
 
 ## Order matters
 
@@ -27,7 +33,7 @@ its original payer and stays advisory.
 
 The claim signature covers `<base_tx_hash>|<soul_hash>`. For `w1-b0001`, correct the manifest
 **first**, so the signature is made over the corrected soul hash; the manifest correction and
-the signature upgrade ride in the **same** pull request and are covered by **one** fee.
+the signature upgrade ride in the **same** request and are covered by **one** fee.
 
 ## Steps for `w1-b0001`
 
@@ -57,26 +63,28 @@ Work in a fresh clone of the ledger on a branch; keep the key file outside the c
    ```
    This adds `claim_signature`, reads the `settlement` record from Base and sets
    `schema_version` to `1.2.0`; none of those needs a voucher.
-5. **Regenerate and verify:**
+5. **Post it as a request:**
    ```bash
-   python scripts/generate_state.py && python scripts/generate_spec.py
-   python scripts/verifier.py              # online: the fee and the settlement are proven on Base
+   python scripts/post_update.py w1-b0001   # writes ledger/updates/<fee_tx>.json (+ .soul.json) and puts the slot back
+   git add ledger/updates && git commit -m "w1-b0001: legacy slot upgrade"
+   python scripts/verifier.py               # online: your request is verified as the block it would become
    ```
    Expect `soul_manifest_hygiene` and both `claim_signature` warnings for this slot to be gone.
-6. **Open one pull request** that changes only `w1-b0001`'s files (dossier, manifest, the
-   generated state). The slot-only containment rule refuses a pull request that mixes a slot
-   with infrastructure.
+6. **Open one pull request** that holds the request and nothing else. The containment rule
+   refuses a pull request that touches the slot, the generated state or anything else.
+   After the merge the bot opens the **apply** pull request (`apply: update requests`): the
+   request becomes the slot, the state is regenerated, the verifier re-proves it; merge it when green.
 
 ## Steps for `w1-b0002`
 
 Its manifest is clean, so there is no voucher: pay the fee, `record_update.py`, run
-`sign_claim.py --upgrade --write`, regenerate, verify, and open its own pull request. A retired
-block stays retired; adding the signature and the settlement record changes none of its living
-fields.
+`sign_claim.py --upgrade --write`, `post_update.py w1-b0002`, verify, and open its own pull
+request. A retired block stays retired; adding the signature and the settlement record changes
+none of its living fields.
 
-## After the merge
+## After the merges
 
-The anchor bot records the new root on Base, and the site's sync publishes the corrected
+(The request, then the bot's apply.) The anchor bot records the new root on Base, and the site's sync publishes the corrected
 manifest and the two signatures within the hour. `w1-b0001.soul_manifest_hygiene` and both
 `claim_signature` warnings disappear from the verifier's report, and the first update on the
 live wall has exercised the signed-claim and update-fee paths on real data.

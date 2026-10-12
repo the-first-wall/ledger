@@ -29,10 +29,10 @@ upgrade, because the claim signature covers the soul hash:
 
     python scripts/record_update.py ledger/w1/<slot_id>.json 0x<fee_tx> --write
     python scripts/sign_claim.py ledger/w1/<slot_id>.json --upgrade --write --key-file key.txt
-    python scripts/generate_state.py && python scripts/generate_spec.py
-    python scripts/verifier.py --skip-rpc
+    python scripts/post_update.py <slot_id>
 
-then one slot-only pull request. See docs/runbooks/legacy-slot-upgrade.md.
+then one pull request holding that update request and nothing else (the bot applies
+it and regenerates the state). See docs/runbooks/legacy-slot-upgrade.md.
 """
 
 from __future__ import annotations
@@ -149,9 +149,10 @@ def main(argv: list, base_dir: str = BASE_DIR) -> int:
           f"python scripts/record_update.py ledger/w1/{slot_id}.json 0x<fee_tx> --write\n"
           f"      2. legacy inscription: python scripts/sign_claim.py ledger/w1/{slot_id}.json --upgrade --write "
           f"--key-file key.txt   (the signature covers the NEW soul_hash)\n"
-          f"      3. python scripts/generate_state.py && python scripts/generate_spec.py && "
-          f"python scripts/verifier.py --skip-rpc\n"
-          f"      4. one slot-only pull request")
+          f"      3. python scripts/post_update.py {slot_id}   (writes your edit as an update request and puts the "
+          f"slot's own files back)\n"
+          f"      4. commit it, python scripts/verifier.py, and open one pull request that holds the request and "
+          f"nothing else")
     return 0
 
 
