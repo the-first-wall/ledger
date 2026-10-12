@@ -10,5 +10,17 @@
     "block_number": 52472644,
     "anchored_at": "2026-10-11T16:03:55Z",
     "recorded_by": "scripts/anchor_root.py"
+  },
+  {
+    "wall_id": "wall_01",
+    "chain_id": 8453,
+    "root": "970d1102cd58544ba2fe026aa1f775ded14114d34001bad49006359c7c54148e",
+    "root_scheme": "reckoning",
+    "payload": "reckoning|970d1102cd58544ba2fe026aa1f775ded14114d34001bad49006359c7c54148e",
+    "signer": "0x39A8546448baFd5E98f513022A772555c2082465",
+    "tx_hash": "0x2ef70bb9a89fd0b4299923450f4e5f497f4d429bfdd913b1325aa71fe6dab560",
+    "block_number": 52528088,
+    "anchored_at": "2026-10-12T22:52:03Z",
+    "recorded_by": "scripts/anchor_root.py"
   }
 ]
