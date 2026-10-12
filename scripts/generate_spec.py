@@ -72,11 +72,12 @@ INVARIANTS = [
         "id": "update-fee",
         "summary": "Every change of an inscribed block by its owner — a transfer to a new owner included "
                    "— settles one USDC transfer from the owner's wallet after the change (the buyer's, on "
-                   "a transfer) to pay_to of at least the update_price_usdc of the tier the WALL is in "
-                   "(how many blocks have been sold; the same fee for every block, whatever its number), "
-                   "and appends exactly one entry {tx_hash, wallet_address, amount_usdc, kind, tier, at} to "
-                   "update_settlements[] naming that tier. One update, one fee; the fee transaction is its "
-                   "own (never a hash cited elsewhere), proven on Base, and the array only grows.",
+                   "a transfer) to pay_to of at least the flat update price (update_price_usdc: 1.00 USDC, "
+                   "the same for every block whatever its number or the wall's tier; it finances the wall: "
+                   "every change is re-anchored on Base, re-verified and re-published), and appends exactly "
+                   "one entry {tx_hash, wallet_address, amount_usdc, kind, at} to update_settlements[]. One "
+                   "update, one fee; the fee transaction is its own (never a hash cited elsewhere), proven on "
+                   "Base, and the array only grows.",
         "enforced_by": "scripts/verifier.py::verify_update_settlements + verify_update_fee_on_chain",
     },
     {
@@ -245,17 +246,15 @@ CLAIM_FLOW = [
 
 UPDATE_FLOW = [
     {"step": 1, "action": "price",
-     "detail": "The update price is the same for every block: current_update_price_usdc in state.json, the "
-               "update_price_usdc of the tier the wall is in (how many blocks have been sold): 0.50 USDC "
-               "while the wall is in genesis, 1.00 in tier-2, 2.00 in tier-3, 3.00 in tier-4, 5.00 in "
-               "tier-5 (scripts/record_update.py --price)."},
+     "detail": "The update price is a flat 1.00 USDC for every block, whatever its number or the wall's tier "
+               "(update_price_usdc in state.json; scripts/record_update.py --price). It finances the wall: "
+               "every change is re-anchored on Base (gas), re-verified and re-published."},
     {"step": 2, "action": "settle",
      "detail": "Send at least that amount in USDC on Base from the block's wallet_address to pay_to; wait "
                "min_confirmations (300) blocks. Overpayment is accepted; no refunds."},
     {"step": 3, "action": "record",
-     "detail": "Append exactly one entry {tx_hash, wallet_address, amount_usdc, kind: 'update', tier, at} to "
-               "update_settlements[] (scripts/record_update.py <dossier> <tx> --write reads it from Base and "
-               "names the wall's tier). "
+     "detail": "Append exactly one entry {tx_hash, wallet_address, amount_usdc, kind: 'update', at} to "
+               "update_settlements[] (scripts/record_update.py <dossier> <tx> --write reads it from Base). "
                "Change what you came to change: living fields freely, sealed fields with a supersession "
                "voucher (spec.md 2.1), the icon with a voucher for 'icon'."},
     {"step": 4, "action": "submit",
@@ -282,7 +281,7 @@ TRANSFER_FLOW = [
                "becomes transfer_tx_hash. The ledger is no party to the sale and holds nothing; it proves on "
                "chain that the payment matches the signed offer."},
     {"step": 3, "action": "update_fee",
-     "detail": "The buyer pays the ledger the tier's update_price_usdc from the BUYER's wallet to pay_to and "
+     "detail": "The buyer pays the ledger the flat update_price_usdc (1.00 USDC) from the BUYER's wallet to pay_to and "
                "records it as an update_settlements entry of kind 'transfer' (scripts/record_update.py "
                "--kind transfer). That is all the ledger is paid for a sale."},
     {"step": 4, "action": "submit",
@@ -335,9 +334,9 @@ def build_spec() -> dict:
             "refunds": "none",
             "unused_settlement": "a payment never used for a merged claim stays valid for a later "
                                  "claim by the same wallet",
-            "update_price_rule": "every change of an inscribed block settles the update_price_usdc of the "
-                                 "tier the wall is in — current_update_price_usdc in state.json, the same "
-                                 "for every block — from the owner's wallet to pay_to (one update, one fee)",
+            "update_price_usdc": core.UPDATE_PRICE_USDC,
+            "update_price_rule": "every change of an inscribed block settles a flat update_price_usdc from "
+                                 "the owner's wallet to pay_to (one update, one fee); it " + core.UPDATE_PRICE_RATIONALE,
             "transfers": "settled between seller and buyer in USDC on Base, outside the ledger; the ledger "
                          "verifies the seller's release signature (consent and price), the buyer's payment "
                          "to the seller for that price, and the buyer's update fee; it holds nothing",
@@ -427,11 +426,12 @@ def build_spec() -> dict:
         "transfer_flow": TRANSFER_FLOW,
         "update_fee": {
             "field": "update_settlements[]",
-            "entry": "{tx_hash, wallet_address, amount_usdc, kind: update|transfer, tier, at}",
+            "entry": "{tx_hash, wallet_address, amount_usdc, kind: update|transfer, at}",
             "payer": "the block's wallet_address after the change (the buyer's, on a transfer)",
-            "amount": "at least the update_price_usdc of the tier the wall is in (current_update_price_usdc "
-                      "in state.json), the same for every block; the entry names that tier; overpayment "
-                      "accepted; no refunds",
+            "amount_usdc": core.UPDATE_PRICE_USDC,
+            "amount": "at least update_price_usdc, flat, the same for every block whatever its number or "
+                      "the wall's tier; overpayment accepted; no refunds",
+            "why": core.UPDATE_PRICE_RATIONALE,
             "tool": "scripts/record_update.py",
         },
         "transfer": {

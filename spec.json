@@ -42,7 +42,8 @@
     "overpayment": "accepted",
     "refunds": "none",
     "unused_settlement": "a payment never used for a merged claim stays valid for a later claim by the same wallet",
-    "update_price_rule": "every change of an inscribed block settles the update_price_usdc of the tier the wall is in \u2014 current_update_price_usdc in state.json, the same for every block \u2014 from the owner's wallet to pay_to (one update, one fee)",
+    "update_price_usdc": 1.0,
+    "update_price_rule": "every change of an inscribed block settles a flat update_price_usdc from the owner's wallet to pay_to (one update, one fee); it finances the wall: every change is re-anchored on Base (gas), re-verified and re-published",
     "transfers": "settled between seller and buyer in USDC on Base, outside the ledger; the ledger verifies the seller's release signature (consent and price), the buyer's payment to the seller for that price, and the buyer's update fee; it holds nothing"
   },
   "anchoring": {
@@ -80,36 +81,31 @@
       "tier": "genesis",
       "min_block": 1,
       "max_block": 500,
-      "price_usdc": 1.0,
-      "update_price_usdc": 0.5
+      "price_usdc": 1.0
     },
     {
       "tier": "tier-2",
       "min_block": 501,
       "max_block": 1500,
-      "price_usdc": 3.0,
-      "update_price_usdc": 1.0
+      "price_usdc": 2.5
     },
     {
       "tier": "tier-3",
       "min_block": 1501,
       "max_block": 5000,
-      "price_usdc": 7.5,
-      "update_price_usdc": 2.0
+      "price_usdc": 5.0
     },
     {
       "tier": "tier-4",
       "min_block": 5001,
       "max_block": 7500,
-      "price_usdc": 15.0,
-      "update_price_usdc": 3.0
+      "price_usdc": 10.0
     },
     {
       "tier": "tier-5",
       "min_block": 7501,
       "max_block": 10000,
-      "price_usdc": 25.0,
-      "update_price_usdc": 5.0
+      "price_usdc": 20.0
     }
   ],
   "pricing_source": "https://thefirstwall.ai/state.json",
@@ -501,7 +497,7 @@
         "update_settlements": {
           "type": "array",
           "maxItems": 256,
-          "description": "Append-only record of the update fees paid to the ledger: every change of an inscribed block by its owner (a transfer to a new owner included) settles one USDC transfer from the owner's wallet to pay_to of at least the update_price_usdc of the tier the WALL is in at the time (the same fee for every block), and appends exactly one entry here naming that tier.",
+          "description": "Append-only record of the update fees paid to the ledger: every change of an inscribed block by its owner (a transfer to a new owner included) settles one USDC transfer from the owner's wallet to pay_to of at least the flat update price (update_price_usdc in state.json: 1.00 USDC, the same for every block; it finances the re-anchoring of every change on Base), and appends exactly one entry here.",
           "items": {
             "type": "object",
             "required": [
@@ -509,7 +505,6 @@
               "wallet_address",
               "amount_usdc",
               "kind",
-              "tier",
               "at"
             ],
             "properties": {
@@ -528,16 +523,6 @@
                 "enum": [
                   "update",
                   "transfer"
-                ]
-              },
-              "tier": {
-                "type": "string",
-                "enum": [
-                  "genesis",
-                  "tier-2",
-                  "tier-3",
-                  "tier-4",
-                  "tier-5"
                 ]
               },
               "at": {
@@ -1595,7 +1580,7 @@
     },
     {
       "id": "update-fee",
-      "summary": "Every change of an inscribed block by its owner \u2014 a transfer to a new owner included \u2014 settles one USDC transfer from the owner's wallet after the change (the buyer's, on a transfer) to pay_to of at least the update_price_usdc of the tier the WALL is in (how many blocks have been sold; the same fee for every block, whatever its number), and appends exactly one entry {tx_hash, wallet_address, amount_usdc, kind, tier, at} to update_settlements[] naming that tier. One update, one fee; the fee transaction is its own (never a hash cited elsewhere), proven on Base, and the array only grows.",
+      "summary": "Every change of an inscribed block by its owner \u2014 a transfer to a new owner included \u2014 settles one USDC transfer from the owner's wallet after the change (the buyer's, on a transfer) to pay_to of at least the flat update price (update_price_usdc: 1.00 USDC, the same for every block whatever its number or the wall's tier; it finances the wall: every change is re-anchored on Base, re-verified and re-published), and appends exactly one entry {tx_hash, wallet_address, amount_usdc, kind, at} to update_settlements[]. One update, one fee; the fee transaction is its own (never a hash cited elsewhere), proven on Base, and the array only grows.",
       "enforced_by": "scripts/verifier.py::verify_update_settlements + verify_update_fee_on_chain"
     },
     {
@@ -1737,7 +1722,7 @@
     {
       "step": 1,
       "action": "price",
-      "detail": "The update price is the same for every block: current_update_price_usdc in state.json, the update_price_usdc of the tier the wall is in (how many blocks have been sold): 0.50 USDC while the wall is in genesis, 1.00 in tier-2, 2.00 in tier-3, 3.00 in tier-4, 5.00 in tier-5 (scripts/record_update.py --price)."
+      "detail": "The update price is a flat 1.00 USDC for every block, whatever its number or the wall's tier (update_price_usdc in state.json; scripts/record_update.py --price). It finances the wall: every change is re-anchored on Base (gas), re-verified and re-published."
     },
     {
       "step": 2,
@@ -1747,7 +1732,7 @@
     {
       "step": 3,
       "action": "record",
-      "detail": "Append exactly one entry {tx_hash, wallet_address, amount_usdc, kind: 'update', tier, at} to update_settlements[] (scripts/record_update.py <dossier> <tx> --write reads it from Base and names the wall's tier). Change what you came to change: living fields freely, sealed fields with a supersession voucher (spec.md 2.1), the icon with a voucher for 'icon'."
+      "detail": "Append exactly one entry {tx_hash, wallet_address, amount_usdc, kind: 'update', at} to update_settlements[] (scripts/record_update.py <dossier> <tx> --write reads it from Base). Change what you came to change: living fields freely, sealed fields with a supersession voucher (spec.md 2.1), the icon with a voucher for 'icon'."
     },
     {
       "step": 4,
@@ -1769,7 +1754,7 @@
     {
       "step": 3,
       "action": "update_fee",
-      "detail": "The buyer pays the ledger the tier's update_price_usdc from the BUYER's wallet to pay_to and records it as an update_settlements entry of kind 'transfer' (scripts/record_update.py --kind transfer). That is all the ledger is paid for a sale."
+      "detail": "The buyer pays the ledger the flat update_price_usdc (1.00 USDC) from the BUYER's wallet to pay_to and records it as an update_settlements entry of kind 'transfer' (scripts/record_update.py --kind transfer). That is all the ledger is paid for a sale."
     },
     {
       "step": 4,
@@ -1779,9 +1764,11 @@
   ],
   "update_fee": {
     "field": "update_settlements[]",
-    "entry": "{tx_hash, wallet_address, amount_usdc, kind: update|transfer, tier, at}",
+    "entry": "{tx_hash, wallet_address, amount_usdc, kind: update|transfer, at}",
     "payer": "the block's wallet_address after the change (the buyer's, on a transfer)",
-    "amount": "at least the update_price_usdc of the tier the wall is in (current_update_price_usdc in state.json), the same for every block; the entry names that tier; overpayment accepted; no refunds",
+    "amount_usdc": 1.0,
+    "amount": "at least update_price_usdc, flat, the same for every block whatever its number or the wall's tier; overpayment accepted; no refunds",
+    "why": "finances the wall: every change is re-anchored on Base (gas), re-verified and re-published",
     "tool": "scripts/record_update.py"
   },
   "transfer": {

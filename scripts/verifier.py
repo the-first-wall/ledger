@@ -30,9 +30,8 @@ Invariants Enforced:
 13. Price ladder (the payment is at least the tier price of the assigned block;
     overpayment is accepted and never refunded).
 14. Update fee (every change of an inscribed block by its owner settles one USDC
-    transfer to pay_to of at least the update price of the tier the WALL is in,
-    the same for every block, recorded in update_settlements[]; one update,
-    one fee).
+    transfer to pay_to of at least the flat update price — 1.00 USDC, the same
+    for every block — recorded in update_settlements[]; one update, one fee).
 15. Transfer release (a sale is settled between the parties outside the ledger;
     the outgoing owner's EIP-191 release signature naming buyer and price, the
     buyer's update fee and — when cited — the on-chain sale payment are what
@@ -740,11 +739,6 @@ def validate_dossier(dossier_data: dict, kind: str = "slot"):
             seen_fee.add(tx)
             if item.get("kind") not in ("update", "transfer"):
                 raise ValueError(f"Update Fee Violation: update_settlements[{i}].kind must be 'update' or 'transfer'.")
-            if core.tier_by_name(item.get("tier")) is None:
-                raise ValueError(
-                    f"Update Fee Violation: update_settlements[{i}].tier must name a pricing tier "
-                    f"({', '.join(t['tier'] for t in core.PRICING_TIERS)})."
-                )
     signature = dossier_data.get("claim_signature")
     if signature is not None and not claims.SIGNATURE_RE.match(str(signature)):
         raise ValueError("claim_signature must be 0x followed by 130 hex characters (r || s || v).")
@@ -1236,41 +1230,30 @@ def verify_price_ladder(slot_id: str, dossier: dict) -> str:
     return f"paid {amount:.2f} USDC for a {price:.2f} USDC {tier['tier']} block{note}"
 
 
-def update_price_of(tier_name: Any) -> float:
-    """The update fee owed while the wall is in the named tier."""
-    tier = core.tier_by_name(tier_name)
-    if tier is None:
-        raise ValueError(f"unknown pricing tier {tier_name!r}")
-    return float(tier["update_price_usdc"])
-
-
 def verify_update_settlements(slot_id: str, new_data: dict, prev_data: Optional[dict],
-                              touched: bool, wall_tier: Dict[str, Any]) -> str:
-    """Every change of an inscribed block settles an update fee (R-23). The fee
-    is the update price of the tier the WALL is in — how many blocks have
-    been sold — the same for every block, whatever its number.
+                              touched: bool) -> str:
+    """Every change of an inscribed block settles an update fee (R-23): a flat
+    UPDATE_PRICE_USDC, the same for every block, whatever its number and
+    whatever tier the wall is in.
 
     * update_settlements[] only grows (verify_append_only) and every entry pays
-      at least the update price of the tier it names;
-    * a PR that changes an inscribed slot appends EXACTLY ONE entry: it names
-      the wall's current tier, is paid from the owner's wallet after the
-      change (the buyer's, on a transfer), of kind 'transfer' when the wallet
-      changed and 'update' otherwise;
+      at least the update price;
+    * a PR that changes an inscribed slot appends EXACTLY ONE entry, paid from
+      the owner's wallet after the change (the buyer's, on a transfer), of
+      kind 'transfer' when the wallet changed and 'update' otherwise;
     * a new inscription carries none.
     The new entry's transaction is proven on Base by the settlement check."""
     fees = new_data.get("update_settlements") or []
+    price = float(core.UPDATE_PRICE_USDC)
     for i, item in enumerate(fees):
         if not isinstance(item, dict):
             raise ValueError(f"Update Fee Violation: update_settlements[{i}] must be an object.")
-        owed = update_price_of(item.get("tier"))
         amount = float(item.get("amount_usdc", 0.0))
-        if amount + 1e-9 < owed:
+        if amount + 1e-9 < price:
             raise ValueError(
-                f"Update Fee Violation: update_settlements[{i}] paid {amount:.2f} USDC; the wall in the "
-                f"{item.get('tier')} tier owes {owed:.2f} USDC per update."
+                f"Update Fee Violation: update_settlements[{i}] paid {amount:.2f} USDC; every update owes "
+                f"{price:.2f} USDC."
             )
-    tier = wall_tier["tier"]
-    price = float(wall_tier["update_price_usdc"])
     if prev_data is None:
         if touched:
             # Added in this change: a new inscription (the assignment) carries no fees.
@@ -1285,20 +1268,14 @@ def verify_update_settlements(slot_id: str, new_data: dict, prev_data: Optional[
     if added < 1:
         raise ValueError(
             f"Update Fee Violation: changing an inscribed block settles an update fee of {price:.2f} USDC "
-            f"(the wall is in the {tier} tier) from the owner's wallet to pay_to; append one "
-            "update_settlements entry {tx_hash, wallet_address, amount_usdc, kind, tier, at} "
-            "(scripts/record_update.py)."
+            "from the owner's wallet to pay_to; append one update_settlements entry "
+            "{tx_hash, wallet_address, amount_usdc, kind, at} (scripts/record_update.py)."
         )
     if added > 1:
         raise ValueError(
             f"Update Fee Violation: one update, one fee — {added} entries were appended in one change."
         )
     entry = fees[-1]
-    if entry.get("tier") != tier:
-        raise ValueError(
-            f"Update Fee Violation: the wall is in the {tier} tier ({price:.2f} USDC per update); "
-            f"update_settlements[{len(fees) - 1}].tier says {entry.get('tier')!r}."
-        )
     wallet = str(new_data.get("wallet_address", "")).lower()
     if str(entry.get("wallet_address", "")).lower() != wallet:
         raise ValueError(
@@ -1312,15 +1289,15 @@ def verify_update_settlements(slot_id: str, new_data: dict, prev_data: Optional[
             f"Update Fee Violation: this change is a {expected_kind!r}; update_settlements[{len(fees) - 1}].kind "
             f"says {entry.get('kind')!r}."
         )
-    return f"{expected_kind} fee {float(entry.get('amount_usdc', 0)):.2f} USDC, wall in the {tier} tier ({price:.2f} USDC)"
+    return f"{expected_kind} fee {float(entry.get('amount_usdc', 0)):.2f} USDC (owed {price:.2f} USDC)"
 
 
 def verify_update_fee_on_chain(slot_id: str, entry: dict, *, rpc: RpcFn = rpc_call,
                                head_block: Optional[int] = None) -> str:
     """One update_settlements entry proven on Base: from its wallet to pay_to,
-    at least the update price of the tier it names, final, and the recorded
-    amount is what the chain says."""
-    price = update_price_of(entry.get("tier"))
+    at least the flat update price, final, and the recorded amount is what the
+    chain says."""
+    price = float(core.UPDATE_PRICE_USDC)
     r = verify_base_tx(str(entry.get("tx_hash", "")), str(entry.get("wallet_address", "")),
                        OFFICIAL_TREASURY_ADDRESS, price, rpc=rpc, head_block=head_block)
     if abs(float(entry.get("amount_usdc", 0.0)) - float(r["amount_usdc"])) > 1e-6:
@@ -1566,7 +1543,7 @@ def run_verification(base_dir: str, *, skip_rpc: bool = False, rpc_scope: str = 
     slots = core.list_slot_files(slot_dir)
     wall_tier = core.current_tier(base_dir)
     print(f"[*] Inspecting {len(slots)} claimed slot(s) in ledger/w1 (wall in the {wall_tier['tier']} tier: "
-          f"claim {wall_tier['price_usdc']:.2f} USDC, update {wall_tier['update_price_usdc']:.2f} USDC)...")
+          f"claim {wall_tier['price_usdc']:.2f} USDC, update {core.UPDATE_PRICE_USDC:.2f} USDC flat)...")
 
     # Replay protection across EVERY tx field of EVERY slot (R-12).
     settlements, conflicts = core.build_settlements(base_dir)
@@ -1649,7 +1626,7 @@ def run_verification(base_dir: str, *, skip_rpc: bool = False, rpc_scope: str = 
                   lambda s=slot_id, d=data, p=prev: verify_ownership_lineage(s, d, slot_dir, p))
         log.guard(slot_id + ".ownership_chain", lambda d=data: claims.verify_lineage_chain(d))
         log.guard(slot_id + ".update_settlements",
-                  lambda s=slot_id, d=data, p=prev: verify_update_settlements(s, d, p, s in touched, wall_tier))
+                  lambda s=slot_id, d=data, p=prev: verify_update_settlements(s, d, p, s in touched))
 
         log.guard(slot_id + ".icon_structure",
                   lambda p=icon_path: verify_icon(p))

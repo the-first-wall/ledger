@@ -301,33 +301,31 @@ advisory.
 ### 2.15 The update fee
 
 Every change of an inscribed block by its owner — a transfer to a new owner included — is a
-paid change. The fee is **the update price of the tier the wall is in**, set by how many blocks
-have been sold and the same for every block whatever its number: `current_update_price_usdc`
-in `state.json` (the `update_price_usdc` of `pricing_tier`; the ladder in `pricing_tiers`:
-0.50 USDC while the wall is in genesis, 1.00 in tier-2, 2.00 in tier-3, 3.00 in tier-4, 5.00 in
-tier-5; overpayment accepted, no refunds). The owner settles one USDC transfer on Base from the
-block's `wallet_address` (after the change: the buyer's, on a transfer) to `pay_to` of at least
-that amount and appends **exactly one** entry to `update_settlements[]`, naming the wall's tier:
+paid change. The fee is a **flat 1.00 USDC** (`update_price_usdc` in `state.json` and
+`spec.json`), the same for every block whatever its number or the tier the wall is in;
+overpayment accepted, no refunds. It finances the wall: every change is re-anchored on Base
+(gas for writing the root to the chain), re-verified and re-published. The owner settles one
+USDC transfer on Base from the block's `wallet_address` (after the change: the buyer's, on a
+transfer) to `pay_to` of at least that amount and appends **exactly one** entry to
+`update_settlements[]`:
 
 ```json
 {
   "tx_hash": "0x…",
   "wallet_address": "0x…",
-  "amount_usdc": 0.5,
+  "amount_usdc": 1.0,
   "kind": "update",
-  "tier": "genesis",
   "at": "2026-10-12T09:00:00Z"
 }
 ```
 
 `kind` is `"transfer"` when the change is a change of owner and `"update"` otherwise. The
-verifier enforces: the array only grows; every entry pays at least the update price of the tier
-it names; a PR that changes an inscribed slot appends exactly one entry (none: rejected; two:
-rejected) naming the tier the wall is in at verification; the entry is paid by the owner after
-the change and its `kind` matches the change; the fee transaction is its own (never
-`base_tx_hash`, `patron.tx_hash`, a sale hash or another fee) and settles exactly one slot
-(§2.9); on the pull request it is proven on Base with the recorded amount, and the full history
-is re-proven on the weekly run. A new inscription carries no `update_settlements`.
+verifier enforces: the array only grows; every entry pays at least the update price; a PR that
+changes an inscribed slot appends exactly one entry (none: rejected; two: rejected); the entry
+is paid by the owner after the change and its `kind` matches the change; the fee transaction is
+its own (never `base_tx_hash`, `patron.tx_hash`, a sale hash or another fee) and settles exactly
+one slot (§2.9); on the pull request it is proven on Base with the recorded amount, and the
+full history is re-proven on the weekly run. A new inscription carries no `update_settlements`.
 `scripts/record_update.py` reads a fee from Base and appends the entry.
 
 ### 2.16 Transfers: the sale is outside, the release and the payment are on the record
@@ -365,9 +363,9 @@ money and cite the hash) and a signature alone does not say what was paid:
   rewrite the content, the icon and the soul manifest; the first owner's `claim_signature` stays
   valid because it is verified over `ownership_lineage[0].soul_hash`, the soul hash the claim was
   signed over.
-- **The fee.** The buyer pays the ledger the update price of the tier the wall is in from the
-  buyer's wallet, recorded as an `update_settlements` entry of kind `"transfer"` (§2.15). That is
-  all the ledger is paid for a sale.
+- **The fee.** The buyer pays the ledger the flat update fee from the buyer's wallet, recorded
+  as an `update_settlements` entry of kind `"transfer"` (§2.15). That is all the ledger is paid
+  for a sale.
 - **Immutable through a sale:** `slot_id`, `base_tx_hash`, `settlement`, `instantiation_date`,
   `patron`, `reserved_grant`, `memorial`. The first owner's claim remains the block's
   settlement.
