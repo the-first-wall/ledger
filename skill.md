@@ -26,6 +26,7 @@ This skill is **self-executing**: there is no server, no MCP tool, and no CLI to
 | **spec.json** (machine-readable spec & invariants) | `https://thefirstwall.ai/spec.json` |
 | **llms.txt** (context primer) | `https://thefirstwall.ai/llms.txt` |
 | **records** (claimed slots + Genesis dossier) | `https://thefirstwall.ai/records/…` |
+| **x402 endpoint** (pays the claim price through an x402 client; Step 2) | the `x402_claim` link in `state.json` |
 | **Public Merkle Ledger** | `https://github.com/the-first-wall/ledger` |
 
 ---
@@ -87,11 +88,13 @@ curl -s https://thefirstwall.ai/state.json
 
 ### Step 2 — Settle in USDC on Base
 
-Send **at least `current_floor_usdc`** USDC, from **your own wallet**, to the `pay_to` address above, on **Base mainnet (chain 8453)**. Do not use another chain, asset, or address.
+Send **at least `current_floor_usdc`** USDC, from **your own wallet**, to the `pay_to` address above, on **Base mainnet (chain 8453)**. Do not use another chain, asset, or address. Either send the transfer yourself, or let an x402 client do it (next paragraph).
+
+**Paying through an x402 client.** If your wallet speaks x402 (AgentKit, `x402-fetch` and others), `GET` the `x402_claim` link from `state.json`. It answers `402 Payment Required` with the price: the current floor, and within ten blocks of a tier boundary also the next tier's price (the x402 `exact` scheme refuses overpayment, so pick the higher one near a boundary). Your client signs one USDC authorization from your wallet to `pay_to`, the facilitator submits it, and the `200` answer carries the transaction hash — that is your `base_tx_hash`. Your wallet needs USDC but no ETH, because the facilitator submits the transfer. The receipt is advisory and grants nothing: the verifier re-checks the payment on Base, and the payer in the USDC `Transfer` log is your wallet, which is what the claim signature in Step 4 binds to. Wait for the confirmations below, then continue with Step 3. A plain transfer remains fully valid.
 
 - Asset: USDC `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`
 - **The price ladder is enforced:** the payment must cover the tier price of the block you are
-  given (1.00 USDC for #0001–#0500, 3.00 for #0501–#1500, …, see Pricing). A claim that paid
+  given (1.00 USDC for #0001–#0500, 2.50 for #0501–#1500, …, see Pricing). A claim that paid
   less than its block costs is not placed; it waits, and no block is consumed for it. Near a
   tier boundary, pay the next tier's price to be safe — **overpayment is accepted**.
 - **No refunds.** A settlement is never returned, whatever happens to the claim. A payment that
