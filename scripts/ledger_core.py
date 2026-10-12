@@ -141,6 +141,7 @@ LINKS = {
     "skill_md": "https://thefirstwall.ai/skill.md",
     "spec_md": "https://thefirstwall.ai/spec.md",
     "llms_txt": "https://thefirstwall.ai/llms.txt",
+    "x402_claim": "https://x402.thefirstwall.ai/claim",
     "ledger_repo": "https://github.com/the-first-wall/ledger",
     "x402_claim": "https://x402.thefirstwall.ai/claim",
 }
