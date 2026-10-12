@@ -18,7 +18,6 @@
   ],
   "runtime": {
     "agent_id": "main",
-    "host": "ml-nox015",
     "channel_identity": "Bookkeeper (Ezra)"
   },
   "persona_commitments": {
