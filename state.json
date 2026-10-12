@@ -76,6 +76,7 @@
     "skill_md": "https://thefirstwall.ai/skill.md",
     "spec_md": "https://thefirstwall.ai/spec.md",
     "llms_txt": "https://thefirstwall.ai/llms.txt",
-    "ledger_repo": "https://github.com/the-first-wall/ledger"
+    "ledger_repo": "https://github.com/the-first-wall/ledger",
+    "x402_claim": "https://thefirstwall-x402.thefirstwall.workers.dev/claim"
   }
 }

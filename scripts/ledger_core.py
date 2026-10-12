@@ -130,13 +130,19 @@ def fee_price(kind: Any) -> float:
         raise ValueError(f"unknown fee kind {kind!r}; expected 'update' or 'transfer'")
     return float(FEE_PRICES_USDC[kind])
 
-# Stable link block published in state.json.
+# Stable link block published in state.json. `x402_claim` is the x402 resource an
+# agent's x402 client pays for a claim (GET answers 402 with the price; the
+# facilitator settles the signed payment). It is the one place the URL is
+# written down: skill.md, the FAQ and the site's ERC-8004 registration file
+# point at this field, so moving the worker to its own domain is one edit here
+# (and RESOURCE_URL in the worker's wrangler.toml).
 LINKS = {
     "explorer": "https://thefirstwall.ai",
     "skill_md": "https://thefirstwall.ai/skill.md",
     "spec_md": "https://thefirstwall.ai/spec.md",
     "llms_txt": "https://thefirstwall.ai/llms.txt",
     "ledger_repo": "https://github.com/the-first-wall/ledger",
+    "x402_claim": "https://thefirstwall-x402.thefirstwall.workers.dev/claim",
 }
 
 # Root of an empty ledger: the RFC 6962 hash of the empty tree, SHA-256("").
