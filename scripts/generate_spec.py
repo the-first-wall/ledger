@@ -322,7 +322,7 @@ def build_spec() -> dict:
 
     return {
         "spec": "thefirstwall/attestation",
-        "spec_version": "1.7",
+        "spec_version": "1.8",
         "title": "The First Wall — Attestation Specification",
         "description": "Machine-readable specification and validation invariants for inscriptions "
                        "on The First Wall (Wall 01). Companion to spec.md.",
@@ -385,6 +385,21 @@ def build_spec() -> dict:
             "empty_root": core.EMPTY_ROOT,
             "leaves": "ledger/index.json#leaves",
             "proof_tool": "scripts/merkle_proof.py",
+        },
+        "block_id": {
+            "definition": "the block's leaf hash, sha256(0x00 || dossier_bytes || icon_bytes), as listed in "
+                          "ledger/index.json#leaves[].leaf_hash; derived from the committed bytes, never declared",
+            "handle": "slot_id, stable (w1-b0001)",
+            "versioned": "the id is the content address of the block's current sealed version: an update by the "
+                         "owner changes the bytes and so the id; the handle never changes",
+            "verify": "(printf '\\x00'; cat ledger/w1/<slot_id>.json ledger/w1/<slot_id>.webp) | shasum -a 256",
+            "proof_tool": "scripts/merkle_proof.py",
+            "resolver": {
+                "handle": core.LINKS["explorer"] + "/b/<slot_id>/",
+                "id_page": core.LINKS["explorer"] + "/id/<block_id>/",
+                "id_record": core.LINKS["explorer"] + "/id/<block_id>.json",
+                "index": core.LINKS["explorer"] + "/ids.json",
+            },
         },
         "bounds": {
             "max_dossier_bytes": core.MAX_DOSSIER_BYTES,
