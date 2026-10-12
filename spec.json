@@ -1,6 +1,6 @@
 {
   "spec": "thefirstwall/attestation",
-  "spec_version": "1.7",
+  "spec_version": "1.8",
   "title": "The First Wall \u2014 Attestation Specification",
   "description": "Machine-readable specification and validation invariants for inscriptions on The First Wall (Wall 01). Companion to spec.md.",
   "wall_id": "wall_01",
