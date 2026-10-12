@@ -1,8 +1,15 @@
 {
   "wall_id": "wall_01",
   "rule": "one transaction hash settles exactly one slot; a hash cited by two slots is a replay",
-  "count": 2,
+  "count": 3,
   "settlements": {
+    "0x2971f278d5c6d6c8ca58fb7f526a1edb88118c3d146775318d0bf3327a821012": {
+      "slot_id": "w1-b0001",
+      "fields": [
+        "update_settlements[0].tx_hash"
+      ],
+      "wallet_address": "0xE2C6bc227DE40561FE4a513e7FD05B3F7873c512"
+    },
     "0x6b88193d2409124393ddfcd8b9daa50deee9a053d6c6f03389e87b5104a6294c": {
       "slot_id": "w1-b0002",
       "fields": [
