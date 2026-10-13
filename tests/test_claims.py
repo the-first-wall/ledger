@@ -801,8 +801,9 @@ class ClaimLedgerTests(unittest.TestCase):
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(core.render(d))
         self._generate()
-        with mock.patch.object(verifier, "changed_entries", return_value=slot_entries("w1-b0001", "M")):
-            report = verifier.run_verification(self.td, skip_rpc=True)
+        # The slot as the apply will leave it: verified like any change of that block.
+        as_updated = verifier.make_scope("update", slots={"w1-b0001"}, updates_={TX2})
+        report = verifier.run_verification(self.td, skip_rpc=True, scope_override=as_updated)
         self.assertEqual(status_of("w1-b0001.claim_signature", report)["status"], "PASS")
         # Signed, but at 1.2.0 the settlement record is part of the upgrade.
         self.assertIn("settlement record missing", failing("w1-b0001.price_ladder", report)[0]["detail"])
@@ -811,8 +812,7 @@ class ClaimLedgerTests(unittest.TestCase):
             fh.write(core.render(d))
         self._generate()
         rpc = FakeRpc().settle(TX1, TEST_ADDR, HEAD - 1000)
-        with mock.patch.object(verifier, "changed_entries", return_value=slot_entries("w1-b0001", "M")):
-            report = verifier.run_verification(self.td, rpc=rpc)
+        report = verifier.run_verification(self.td, rpc=rpc, scope_override=as_updated)
         self.assertEqual(report["result"], "PASS", [c for c in report["checks"] if c["status"] == "FAIL"])
         self.assertEqual(status_of("w1-b0001.price_ladder", report)["status"], "PASS")
         self.assertEqual(status_of("w1-b0001.settlement_base_rpc", report)["status"], "PASS")

@@ -18,6 +18,9 @@ flat, paid by the buyer; a transfer takes more checking). The entry:
 
 This tool reads the transfer from Base with the verifier's own routine
 (sender, payee, amount, finality) and appends the entry. No key is involved.
+
+Then post the change as an update request: `python scripts/post_update.py <slot_id>`
+(the slot itself and the generated state are never part of your pull request).
 """
 
 from __future__ import annotations

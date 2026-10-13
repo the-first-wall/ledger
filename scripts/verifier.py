@@ -6,9 +6,11 @@ Zero LLMs. 100% prompt injection immune.
 Invariants Enforced:
  1. Base Mainnet RPC Verification (USDC transfer, sender & recipient match,
     amount >= the tier price of the block, confirmation depth >= MIN_CONFIRMATIONS).
- 2. PR Scope Containment (a PR posts ONE claim, or updates ONE slot, or is the
-    assignment that turns pending claims into slots, or is infrastructure;
-    slot files are never deleted; a merged claim is never edited).
+ 2. PR Scope Containment (a PR posts ONE claim, or posts ONE update request for a
+    block, or is the bot's assignment that turns pending claims into slots, or the
+    bot's apply that turns pending requests into slot changes, or is
+    infrastructure; nobody outside the bot touches a slot or the generated state;
+    slot files are never deleted; a merged claim or request is never edited).
  3. Slot identity (file name == slot_id == icon basename == soul manifest name;
     block number within 1..10000).
  4. Append-only history (sealed fields change only with a supersession voucher;
@@ -51,6 +53,7 @@ import re
 import struct
 import subprocess
 import sys
+import tempfile
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import jsonschema
@@ -60,6 +63,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ledger_core as core  # noqa: E402
 import content_safety as safety  # noqa: E402
 import claims  # noqa: E402
+import updates  # noqa: E402
 
 BASE_CHAIN_ID = 8453
 USDC_BASE_CONTRACT = core.USDC_CONTRACT.lower()
@@ -101,7 +105,9 @@ SLOT_FILE_RE = re.compile(r"^ledger/w1/(w1-b(?:\d{4}|10000))\.json$")
 ICON_FILE_RE = re.compile(r"^ledger/w1/(w1-b(?:\d{4}|10000))\.webp$")
 SOUL_FILE_RE = re.compile(r"^ledger/souls/(w1-b(?:\d{4}|10000))\.soul\.json$")
 CLAIM_FILE_RES = (claims.CLAIM_FILE_RE, claims.CLAIM_ICON_RE, claims.CLAIM_SOUL_RE)
-# Files the generator rewrites whenever a slot lands; a slot PR must carry them.
+UPDATE_FILE_RES = updates.UPDATE_FILE_RES
+# Files the generator rewrites whenever a slot lands or changes. Only the bot's
+# assignment and apply pull requests carry them; an owner's pull request never does.
 GENERATED_PATHS = {
     "state.json",
     "ledger/index.json",
@@ -149,31 +155,59 @@ def slot_paths_for(slot_id: str) -> Set[str]:
     }
 
 
+def make_scope(kind: str, *, slots: Optional[Set[str]] = None, claims_: Optional[Set[str]] = None,
+               assigned: Optional[Set[str]] = None, updates_: Optional[Set[str]] = None,
+               applied: Optional[Set[str]] = None, withdrawn: Optional[Set[str]] = None) -> Dict[str, Any]:
+    """The shape every scope carries, so callers never test for a missing key."""
+    return {"kind": kind, "slots": slots or set(), "claims": claims_ or set(),
+            "assigned": assigned or set(), "updates": updates_ or set(),
+            "applied": applied or set(), "withdrawn": withdrawn or set()}
+
+
 def scope_of(entries: List[Tuple[str, str]]) -> Dict[str, Any]:
     """Pure containment rule over a list of (status, path). Classifies the
-    change and returns {"kind", "slots", "claims", "assigned"}:
+    change and returns {"kind", "slots", "claims", "assigned", "updates",
+    "applied", "withdrawn"}:
 
     * "claim"      — a claim is posted: exactly the files of ONE settlement
                      transaction (ledger/claims/<tx>.json, .webp, .soul.json),
                      all added, nothing else. A merged claim is never edited:
                      it is placed by the assignment, or it waits.
+    * "update"     — an owner posts ONE request to change an existing block:
+                     the files of ONE fee transaction (ledger/updates/<tx>.json
+                     and, when they change, .webp and .soul.json), all added,
+                     nothing else. The owner touches no slot and no generated
+                     file; the apply puts the request in place. A merged
+                     request is never edited.
     * "assignment" — pending claims become slots: the removed claim files, the
                      added slot files (any number; never a modified slot) and
                      the generated state, nothing else. verify_assignment
                      proves the mapping and the order.
-    * "slot"       — an owner updates ONE existing slot: that slot's files and
-                     the generated state, nothing else. A new inscription is
-                     never added directly: it arrives as a claim and the
-                     system assigns its block.
-    * "infra"      — scripts/, schemas/, .github/, docs: no slot and no claim
-                     is touched.
-    Slot dossiers, icons and soul manifests are never deleted; a claim file is
-    deleted only by the assignment that places it."""
+    * "apply"      — pending requests become slot changes: the removed request
+                     files, the modified slot files (each slot by exactly one
+                     request) and the generated state, nothing else.
+                     verify_apply proves each slot is its request, byte for byte.
+    * "withdrawal" — pending requests are removed and nothing else changes: how
+                     a request that can no longer be applied is cleared.
+    * "infra"      — scripts/, schemas/, .github/, docs: no slot, claim or
+                     request is touched.
+    A slot is never changed directly and never added directly: a new inscription
+    arrives as a claim and the system assigns its block; a change arrives as a
+    request and the system applies it. The generated state (state.json,
+    ledger/index.json, ledger/settlements.json, the canvas composite) is written
+    only by the bot's assignment and apply. Slot dossiers, icons and soul
+    manifests are never deleted; a claim file is deleted only by the assignment
+    that places it, a request file only by the apply that applies it (or a
+    withdrawal)."""
     slots: Set[str] = set()
     slot_status: Dict[str, Set[str]] = {}
+    dossier_status: Dict[str, str] = {}
     claims_added: Set[str] = set()
     claims_deleted: Set[str] = set()
     claims_modified: Set[str] = set()
+    updates_added: Set[str] = set()
+    updates_deleted: Set[str] = set()
+    updates_modified: Set[str] = set()
     paths: List[str] = []
     for status, path in entries:
         paths.append(path)
@@ -184,6 +218,8 @@ def scope_of(entries: List[Tuple[str, str]]) -> Dict[str, Any]:
                     raise ValueError(f"PR Boundary Violation: {path} may never be deleted.")
                 slots.add(m.group(1))
                 slot_status.setdefault(m.group(1), set()).add(status[:1])
+                if rx is SLOT_FILE_RE:
+                    dossier_status[m.group(1)] = status[:1]
         for rx in CLAIM_FILE_RES:
             m = rx.match(path)
             if m:
@@ -193,6 +229,15 @@ def scope_of(entries: List[Tuple[str, str]]) -> Dict[str, Any]:
                     claims_added.add(m.group(1))
                 else:
                     claims_modified.add(m.group(1))
+        for rx in UPDATE_FILE_RES:
+            m = rx.match(path)
+            if m:
+                if status.startswith("D"):
+                    updates_deleted.add(m.group(1))
+                elif status.startswith("A"):
+                    updates_added.add(m.group(1))
+                else:
+                    updates_modified.add(m.group(1))
 
     if claims_modified:
         raise ValueError(
@@ -200,9 +245,23 @@ def scope_of(entries: List[Tuple[str, str]]) -> Dict[str, Any]:
             "it is placed by the assignment, or it waits. To change what you posted, settle "
             "again and post a new claim."
         )
+    if updates_modified:
+        raise ValueError(
+            f"PR Boundary Violation: a merged update request is never edited ({sorted(updates_modified)}); "
+            "it is applied by the bot, or it waits. To change what you posted, pay a new fee and post "
+            "a new request."
+        )
+    if (claims_added or claims_deleted) and (updates_added or updates_deleted):
+        raise ValueError(
+            "PR Boundary Violation: claims and update requests travel in separate PRs."
+        )
     if claims_added and claims_deleted:
         raise ValueError(
             "PR Boundary Violation: a PR either posts a claim or assigns pending claims, never both."
+        )
+    if updates_added and updates_deleted:
+        raise ValueError(
+            "PR Boundary Violation: a PR either posts an update request or applies pending requests, never both."
         )
 
     if claims_added:
@@ -219,7 +278,29 @@ def scope_of(entries: List[Tuple[str, str]]) -> Dict[str, Any]:
                 f".soul.json; it also touches: {stray}. The system assigns the block, and the "
                 "generated state changes with the assignment, not with the claim."
             )
-        return {"kind": "claim", "slots": set(), "claims": {tx}, "assigned": set()}
+        return make_scope("claim", claims_={tx})
+
+    if updates_added:
+        if len(updates_added) > 1:
+            raise ValueError(
+                f"PR Boundary Violation: a PR posts ONE update request; found {len(updates_added)}: "
+                f"{sorted(updates_added)}"
+            )
+        tx = next(iter(updates_added))
+        stray = sorted(p for p in paths if p not in updates.update_paths_for(tx))
+        if stray:
+            raise ValueError(
+                f"PR Boundary Violation: an update request PR adds only ledger/updates/{tx}.json and, "
+                f"when they change, .webp and .soul.json; it also touches: {stray}. The owner never "
+                "touches a slot or the generated state (state.json, ledger/index.json, "
+                "ledger/settlements.json, the canvas composite): the bot applies the request and "
+                "regenerates them."
+            )
+        if ("A", f"ledger/updates/{tx}.json") not in [(st[:1], p) for st, p in entries]:
+            raise ValueError(
+                f"PR Boundary Violation: a request is its dossier: ledger/updates/{tx}.json is missing."
+            )
+        return make_scope("update", updates_={tx})
 
     if claims_deleted:
         modified = sorted(sid for sid, st in slot_status.items() if st != {"A"})
@@ -248,32 +329,60 @@ def scope_of(entries: List[Tuple[str, str]]) -> Dict[str, Any]:
                 f"PR Boundary Violation: {len(claims_deleted)} claim(s) removed but {len(slots)} "
                 "slot(s) added; each placed claim becomes exactly one slot."
             )
-        return {"kind": "assignment", "slots": slots, "claims": set(), "assigned": claims_deleted}
+        return make_scope("assignment", slots=slots, assigned=claims_deleted)
 
-    if len(slots) > 1:
-        raise ValueError(
-            "PR Boundary Violation: a PR must not alter more than ONE slot. "
-            f"Found changes to {len(slots)} slots: {sorted(slots)}"
-        )
-    if slots:
-        slot_id = next(iter(slots))
-        allowed = slot_paths_for(slot_id) | GENERATED_PATHS
+    if updates_deleted:
+        if not slots:
+            allowed = set()
+            for tx in updates_deleted:
+                allowed |= updates.update_paths_for(tx)
+            stray = sorted(p for p in paths if p not in allowed)
+            if stray:
+                raise ValueError(
+                    "PR Boundary Violation: a withdrawal only removes request files, and changes "
+                    f"nothing else; it also touches: {stray}."
+                )
+            return make_scope("withdrawal", withdrawn=updates_deleted)
+        notmod = sorted(sid for sid in slots if dossier_status.get(sid) != "M")
+        if notmod:
+            raise ValueError(
+                f"PR Boundary Violation: an apply changes existing slots only; the dossier of {notmod} "
+                "is not a modification."
+            )
+        allowed = set(GENERATED_PATHS)
+        for sid in slots:
+            allowed |= slot_paths_for(sid)
+        for tx in updates_deleted:
+            allowed |= updates.update_paths_for(tx)
         stray = sorted(p for p in paths if p not in allowed)
         if stray:
             raise ValueError(
-                f"PR Boundary Violation: a PR that updates {slot_id} may only "
-                f"change that slot's files and the generated state; it also touches: {stray}. "
-                "Infrastructure changes (scripts/, schemas/, .github/, docs) belong in a "
-                "separate PR."
+                "PR Boundary Violation: an apply changes only the applied requests' files, the changed "
+                f"slots' files and the generated state; it also touches: {stray}."
             )
-        if any(st.startswith("A") and pth == f"ledger/w1/{slot_id}.json" for st, pth in entries):
+        if len(slots) != len(updates_deleted):
             raise ValueError(
-                f"PR Boundary Violation: {slot_id} is a new inscription. A claimant never names a "
-                "block: post ledger/claims/<base_tx_hash>.json, .webp and .soul.json instead, and "
-                "the system assigns the block (skill.md, Step 4)."
+                f"PR Boundary Violation: {len(updates_deleted)} request(s) removed but {len(slots)} "
+                "slot(s) changed; each applied request changes exactly one slot, and a slot takes "
+                "one request at a time."
             )
-        return {"kind": "slot", "slots": slots, "claims": set(), "assigned": set()}
-    return {"kind": "infra", "slots": set(), "claims": set(), "assigned": set()}
+        return make_scope("apply", slots=slots, applied=updates_deleted)
+
+    if slots:
+        if any(st.startswith("A") and pth.startswith("ledger/w1/") and pth.endswith(".json")
+               for st, pth in entries):
+            raise ValueError(
+                "PR Boundary Violation: a new inscription is never added directly. A claimant never "
+                "names a block: post ledger/claims/<base_tx_hash>.json, .webp and .soul.json instead, "
+                "and the system assigns the block (skill.md, Step 4)."
+            )
+        raise ValueError(
+            f"PR Boundary Violation: a block is never changed directly ({sorted(slots)}). Post an update "
+            "request instead — ledger/updates/<fee_tx_hash>.json (and .webp / .soul.json when they "
+            "change) — and the system applies it and regenerates the state (skill.md, \"Updating your "
+            "own block\"). The generated state is never part of a pull request from outside."
+        )
+    return make_scope("infra")
 
 
 def check_scope(entries: List[Tuple[str, str]]) -> Set[str]:
@@ -286,12 +395,17 @@ def scope_detail(scope: Dict[str, Any]) -> str:
     kind = scope["kind"]
     if kind == "claim":
         return "one claim posted: " + next(iter(scope["claims"]))[:12] + "…"
+    if kind == "update":
+        return "one update request posted: " + next(iter(scope["updates"]))[:12] + "…"
     if kind == "assignment":
         return (f"assignment: {len(scope['assigned'])} claim(s) -> "
                 f"{', '.join(sorted(scope['slots']))}")
-    if kind == "slot":
-        return f"scope contained to slot: {sorted(scope['slots'])[0]}"
-    return "no slot or claim touched (infrastructure-only change)"
+    if kind == "apply":
+        return (f"apply: {len(scope['applied'])} request(s) -> "
+                f"{', '.join(sorted(scope['slots']))}")
+    if kind == "withdrawal":
+        return f"withdrawal: {len(scope['withdrawn'])} pending request(s) removed"
+    return "no slot, claim or request touched (infrastructure-only change)"
 
 
 def enforce_pr_scope_containment() -> str:
@@ -1466,6 +1580,101 @@ def verify_assignment(base_dir: str, assigned: Set[str], *,
     return detail
 
 
+def verify_update_identity(update_file: str, dossier: dict, base_dir: str) -> str:
+    """A request is named by its fee transaction, names the block it changes
+    (which must be inscribed) and is the only request waiting for that block."""
+    tx = update_file[:-5]
+    cited = updates.fee_tx_of(dossier)
+    if cited != tx:
+        raise ValueError(
+            f"Update Request Violation: {update_file} is named by its fee transaction, the newest "
+            f"update_settlements entry (lower-case hash); that entry cites {cited!r}."
+        )
+    slot_id = str(dossier.get("slot_id", ""))
+    try:
+        if slot_id != core.slot_id_for(core.slot_number(slot_id)):
+            raise ValueError(f"Invalid slot id {slot_id!r}: expected w1-b0001 … w1-b10000.")
+    except ValueError as e:
+        raise ValueError(f"Update Request Violation: slot_id: {e}")
+    if not os.path.exists(os.path.join(core.ledger_w1_dir(base_dir), f"{slot_id}.json")):
+        raise ValueError(
+            f"Update Request Violation: {slot_id} is not inscribed; a request changes an existing block "
+            "(a new inscription is a claim)."
+        )
+    others = [t for t in updates.pending_by_slot(base_dir).get(slot_id, []) if t != tx]
+    if others:
+        raise ValueError(
+            f"Update Request Violation: request {others[0][:12]}… for {slot_id} is already waiting; "
+            "one request per block waits at a time (wait for the bot to apply it, or ask for it to be withdrawn)."
+        )
+    return f"named by its fee tx; the only request waiting for {slot_id}"
+
+
+def verify_apply(base_dir: str, applied: Set[str], slots: Set[str], *,
+                 load_base: Optional[Callable[[str], Optional[bytes]]] = None) -> str:
+    """An apply turns pending requests into slot changes. Proves that
+
+    * every removed request was a pending request on the base branch, and its
+      dossier is, byte for byte, the file of the block it names;
+    * the block's icon and soul manifest are the request's when it carried
+      them and are otherwise untouched;
+    * no request file is left behind, no block outside the requests changed,
+      and no block took more than one request.
+    The new dossier is then verified like any change of a block (append-only
+    history, one fee, the owner's signature, the lineage, the content)."""
+    load_base = load_base or _git_show
+    slot_dir = core.ledger_w1_dir(base_dir)
+    souls_dir = os.path.join(base_dir, "ledger", "souls")
+    by_slot: Dict[str, str] = {}
+    for tx in sorted(applied):
+        raw = load_base(f"ledger/updates/{tx}.json")
+        if raw is None:
+            raise ValueError(
+                f"Apply Violation: ledger/updates/{tx}.json is not a pending request on the base branch."
+            )
+        try:
+            request = json.loads(raw.decode("utf-8"), object_pairs_hook=core._reject_duplicate_keys)
+        except ValueError as e:
+            raise ValueError(f"Apply Violation: the base request {tx[:12]}… is unreadable: {e}")
+        slot_id = str(request.get("slot_id", ""))
+        if slot_id not in slots:
+            raise ValueError(
+                f"Apply Violation: request {tx[:12]}… names {slot_id!r}, which this pull request does not change."
+            )
+        if slot_id in by_slot:
+            raise ValueError(
+                f"Apply Violation: {slot_id} takes one request at a time; "
+                f"{by_slot[slot_id][:12]}… and {tx[:12]}… were applied together."
+            )
+        by_slot[slot_id] = tx
+        if _read_bytes(os.path.join(slot_dir, f"{slot_id}.json")) != raw:
+            raise ValueError(
+                f"Apply Violation: {slot_id} is not request {tx[:12]}… byte for byte; the apply "
+                "moves the owner's file into place and changes nothing in it."
+            )
+        for kind, req_path, slot_path, base_slot_path in (
+            ("icon", f"ledger/updates/{tx}.webp", os.path.join(slot_dir, f"{slot_id}.webp"),
+             f"ledger/w1/{slot_id}.webp"),
+            ("soul manifest", f"ledger/updates/{tx}.soul.json", os.path.join(souls_dir, f"{slot_id}.soul.json"),
+             f"ledger/souls/{slot_id}.soul.json"),
+        ):
+            carried = load_base(req_path)
+            expected = carried if carried is not None else load_base(base_slot_path)
+            if _read_bytes(slot_path) != expected:
+                raise ValueError(
+                    f"Apply Violation: the {kind} of {slot_id} is "
+                    + ("not the request's, byte for byte." if carried is not None else
+                       "changed, but the request carries none.")
+                )
+        left = sorted(p for p in updates.update_paths_for(tx) if os.path.exists(os.path.join(base_dir, p)))
+        if left:
+            raise ValueError(f"Apply Violation: the applied request's files remain: {left}.")
+    extra = sorted(slots - set(by_slot))
+    if extra:
+        raise ValueError(f"Apply Violation: {extra} changed without a request that names them.")
+    return f"{len(applied)} request(s) applied byte for byte"
+
+
 # -----------------------------------------------------------------------------
 # 7. ORCHESTRATION
 # -----------------------------------------------------------------------------
@@ -1514,43 +1723,117 @@ def _load_manifest(ledger_root, dossier):
         return None
 
 
+def _verify_update_request(base_dir: str, scope: Dict[str, Any], log: "CheckLog", *, skip_rpc: bool,
+                           rpc_scope: str, rpc: RpcFn, report_path: Optional[str],
+                           check_anchors: bool) -> Dict[str, Any]:
+    """A pull request that posts an update request is verified as the slot it
+    would become: the request is applied to a throw-away overlay of the ledger
+    (the slot's files replaced, the request removed, the generated state
+    regenerated) and the overlay goes through every check a change of that block
+    goes through — schema, the owner's signature, append-only history, the fee
+    proven on Base, the lineage of a transfer, the content screen — exactly as
+    the bot's apply pull request will be verified once the request is merged.
+    Nothing outside the request is read from the pull request."""
+    tx = next(iter(scope["updates"]))
+    name = f"{tx}.json"
+    tag = f"update:{tx[:12]}"
+    request: Any = None
+    path = os.path.join(updates.updates_dir(base_dir), name)
+    if not os.path.exists(path):
+        log.record(tag + ".parse", "FAIL", f"ledger/updates/{name} is missing from the pull request")
+    elif os.path.getsize(path) > core.MAX_DOSSIER_BYTES:
+        log.record(tag + ".size", "FAIL", f"{os.path.getsize(path)} bytes exceeds the "
+                   f"{core.MAX_DOSSIER_BYTES}-byte dossier cap")
+    else:
+        try:
+            request = core.load_json_strict(path)
+            if not isinstance(request, dict):
+                log.record(tag + ".parse", "FAIL", "request is not a JSON object")
+                request = None
+        except ValueError as e:
+            log.record(tag + ".parse", "FAIL", str(e))
+    if request is not None and log.guard(tag + ".identity",
+                                         lambda: verify_update_identity(name, request, base_dir)):
+        with tempfile.TemporaryDirectory(prefix="tfw-overlay-") as tmp:
+            slot_id = updates.build_overlay(base_dir, tx, tmp)
+            print(f"[*] Verifying request {tx[:12]}… as the {slot_id} it would become")
+            return run_verification(
+                tmp, skip_rpc=skip_rpc, rpc_scope=rpc_scope, rpc=rpc, report_path=report_path,
+                check_anchors=check_anchors, log_seed=log,
+                scope_override=make_scope("update", slots={slot_id}, updates_={tx}))
+    report = {
+        "wall_id": core.WALL_ID,
+        "slots_validated": len(core.list_slot_files(core.ledger_w1_dir(base_dir))),
+        "claims_pending": len(claims.list_claim_files(base_dir)),
+        "change_kind": "update",
+        "merkle_root": "",
+        "rpc_scope": "skipped" if skip_rpc else rpc_scope,
+        "result": "FAIL",
+        "checks": log.records,
+    }
+    if report_path:
+        with open(report_path, "w", encoding="utf-8") as fh:
+            json.dump(report, fh, indent=2)
+            fh.write("\n")
+    return report
+
+
 def run_verification(base_dir: str, *, skip_rpc: bool = False, rpc_scope: str = "auto",
                      rpc: RpcFn = rpc_call, report_path: Optional[str] = None,
-                     check_anchors: bool = True) -> Dict[str, Any]:
+                     check_anchors: bool = True, scope_override: Optional[Dict[str, Any]] = None,
+                     only_slots: Optional[Set[str]] = None,
+                     log_seed: Optional["CheckLog"] = None) -> Dict[str, Any]:
     """Run every invariant over the ledger at base_dir and return the report.
 
     rpc_scope:
       "all"     — settle every slot and claim on chain (weekly schedule / manual runs);
       "changed" — settle only the slots and claims this PR touches (PR and push runs);
       "auto"    — "changed" when a PR diff is available, else "all".
+
+    `scope_override`, `only_slots` and `log_seed` are for the verifier's own use: an
+    update request is verified as the slot it would become (the overlay, see
+    _verify_update_request), and the apply bot tries one request at a time.
     """
     slot_dir = core.ledger_w1_dir(base_dir)
     ledger_root = os.path.join(base_dir, "ledger")
     claims_dir = claims.claims_dir(base_dir)
-    log = CheckLog()
+    log = log_seed if log_seed is not None else CheckLog()
 
     # PR scope: what kind of change this is and what it touches.
-    entries = changed_entries()
-    scope: Dict[str, Any] = {"kind": "infra", "slots": set(), "claims": set(), "assigned": set()}
-    if entries:
-        try:
-            scope = scope_of(entries)
+    scope: Dict[str, Any] = make_scope("infra")
+    if scope_override is not None:
+        entries: Optional[List[Tuple[str, str]]] = [("overlay", "")]
+        scope = scope_override
+        if not any(r["check"] == "pr.scope_containment" for r in log.records):
             log.record("pr.scope_containment", "PASS", scope_detail(scope))
-        except ValueError as e:
-            log.record("pr.scope_containment", "FAIL", str(e))
-            # Still treat every slot and claim named in the diff as "touched"
-            # so the strict per-item checks run against it.
-            for _, path in entries:
-                for rx in (SLOT_FILE_RE, ICON_FILE_RE, SOUL_FILE_RE):
-                    m = rx.match(path)
-                    if m:
-                        scope["slots"].add(m.group(1))
-                for rx in CLAIM_FILE_RES:
-                    m = rx.match(path)
-                    if m:
-                        scope["claims"].add(m.group(1))
     else:
-        log.record("pr.scope_containment", "PASS", "no PR diff to check")
+        entries = changed_entries()
+        if entries:
+            try:
+                scope = scope_of(entries)
+                log.record("pr.scope_containment", "PASS", scope_detail(scope))
+            except ValueError as e:
+                log.record("pr.scope_containment", "FAIL", str(e))
+                # Still treat every slot, claim and request named in the diff as
+                # "touched" so the strict per-item checks run against it.
+                for _, path in entries:
+                    for rx in (SLOT_FILE_RE, ICON_FILE_RE, SOUL_FILE_RE):
+                        m = rx.match(path)
+                        if m:
+                            scope["slots"].add(m.group(1))
+                    for rx in CLAIM_FILE_RES:
+                        m = rx.match(path)
+                        if m:
+                            scope["claims"].add(m.group(1))
+                    for rx in UPDATE_FILE_RES:
+                        m = rx.match(path)
+                        if m:
+                            scope["updates"].add(m.group(1))
+        else:
+            log.record("pr.scope_containment", "PASS", "no PR diff to check")
+    if scope["kind"] == "update" and scope_override is None:
+        return _verify_update_request(base_dir, scope, log, skip_rpc=skip_rpc, rpc_scope=rpc_scope, rpc=rpc,
+                                      report_path=report_path, check_anchors=check_anchors)
     touched: Set[str] = scope["slots"]
     touched_claims: Set[str] = scope["claims"]
 
@@ -1585,6 +1868,8 @@ def run_verification(base_dir: str, *, skip_rpc: bool = False, rpc_scope: str = 
             log.record("rpc.head_block", "FAIL", f"could not read chain head: {e}")
 
     for s_file in slots:
+        if only_slots is not None and s_file[:-5] not in only_slots:
+            continue
         path = os.path.join(slot_dir, s_file)
         size = os.path.getsize(path)
         if size > core.MAX_DOSSIER_BYTES:
@@ -1823,6 +2108,47 @@ def run_verification(base_dir: str, *, skip_rpc: bool = False, rpc_scope: str = 
                 log.record(f"claim:{tx[:12]}.placement",
                            "FAIL" if tx in touched_claims else "WARN",
                            f"cannot be placed: {why_not[tx]}")
+
+    # --- Pending update requests: posted, waiting for the bot to apply them -----
+    update_files = updates.list_update_files(base_dir)
+    if update_files:
+        print(f"\n[*] Inspecting {len(update_files)} pending update request(s) in ledger/updates...")
+    for u_file in update_files:
+        tx = u_file[:-5]
+        tag = f"update:{tx[:12]}"
+        u_path = os.path.join(updates.updates_dir(base_dir), u_file)
+        size = os.path.getsize(u_path)
+        if size > core.MAX_DOSSIER_BYTES:
+            log.record(tag + ".size", "FAIL",
+                       f"{size} bytes exceeds the {core.MAX_DOSSIER_BYTES}-byte dossier cap")
+            continue
+        try:
+            request = core.load_json_strict(u_path)
+        except ValueError as e:
+            log.record(tag + ".parse", "FAIL", str(e))
+            continue
+        if not isinstance(request, dict):
+            log.record(tag + ".parse", "FAIL", "request is not a JSON object")
+            continue
+        log.guard(tag + ".identity", lambda f=u_file, d=request: verify_update_identity(f, d, base_dir))
+        # Informational: a request whose block moved on after it was posted
+        # cannot be applied; the owner posts a fresh one and this one is withdrawn.
+        slot_path = os.path.join(slot_dir, f"{request.get('slot_id')}.json")
+        if os.path.exists(slot_path):
+            try:
+                current = core.load_json_strict(slot_path)
+                req_fees = request.get("update_settlements") or []
+                if req_fees[:-1] != (current.get("update_settlements") or []):
+                    log.record(tag + ".current", "WARN",
+                               f"stale: {request.get('slot_id')} changed after this request was posted, so the "
+                               "bot cannot apply it; post a fresh one and have this one withdrawn")
+            except ValueError:
+                pass
+
+    # --- The apply: pending requests became slot changes ---------------------
+    if scope["kind"] == "apply":
+        log.guard("apply.requests",
+                  lambda: verify_apply(base_dir, scope["applied"], scope["slots"]))
 
     # --- The assignment: pending claims became slots -------------------------
     if scope["kind"] == "assignment":
