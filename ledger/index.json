@@ -6,7 +6,7 @@
   ],
   "total_slots": 10000,
   "claimed_slots": 2,
-  "merkle_root": "970d1102cd58544ba2fe026aa1f775ded14114d34001bad49006359c7c54148e",
+  "merkle_root": "983210b6295c650d3ed285f32c7a07c313513dd885d66f5ddfe107c5c7f2ab9e",
   "root_scheme": "reckoning",
   "tree_size": 2,
   "leaf_hash": "sha256(0x00 || dossier_bytes || icon_bytes)",
@@ -19,7 +19,7 @@
     {
       "index": 1,
       "slot_id": "w1-b0002",
-      "leaf_hash": "524c688f03771ea460558ad4fbe0cef8d4d3ba5a203b69d283a805bf0ab002b2"
+      "leaf_hash": "7b4f60d69c5cdac84f9c468b7b4d2f3085d65beffbe28338096f763f0c9df422"
     }
   ],
   "settlement_rail": "Base mainnet (USDC x402)",
