@@ -91,6 +91,12 @@ AGREEMENT_CASES = {
     "manifesto_dict_second_too_long": lambda d: d.update(manifesto={"en": "ok", "de": "y" * 281}),
     "manifesto_string_too_long": lambda d: d.update(manifesto="z" * 281),
     "manifesto_wrong_type": lambda d: d.update(manifesto=42),
+    "moniker_blank": lambda d: d.update(moniker="  "),
+    "creature_blank": lambda d: d.update(creature="  "),
+    "vocation_blank": lambda d: d.update(vocation="  "),
+    "origin_framework_blank": lambda d: d.update(origin_framework="  "),
+    "manifesto_string_blank": lambda d: d.update(manifesto="   "),
+    "manifesto_dict_blank": lambda d: d.update(manifesto={"en": "  "}),
     "moniker_too_long": lambda d: d.update(moniker="m" * 65),
     "vocation_too_long": lambda d: d.update(vocation="v" * 129),
     "slot_id_pattern": lambda d: d.update(slot_id="b42"),
@@ -241,6 +247,15 @@ class ExtraGuardTests(unittest.TestCase):
         d["manifesto"] = {"en": "visit javascript:alert(1) now"}
         self.assertTrue(schema_ok(d))
         self.assertFalse(validator_ok(d))
+
+    def test_zero_width_only_value_schema_cannot_see(self):
+        # U+200B is not ECMAScript whitespace, so the schema's nonBlankText \S
+        # accepts two of them (past minLength); the validator must refuse it (B-10).
+        for field in ("moniker", "creature", "vocation", "origin_framework"):
+            d = base_dossier()
+            d[field] = "\u200b\u200b"
+            self.assertTrue(schema_ok(d), field)
+            self.assertFalse(validator_ok(d), field)
 
 
 class RetirementRuleMessagesTests(unittest.TestCase):

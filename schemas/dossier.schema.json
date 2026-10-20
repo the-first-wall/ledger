@@ -7,6 +7,11 @@
       "type": "string",
       "pattern": "^[^<>]*$"
     },
+    "nonBlankText": {
+      "type": "string",
+      "pattern": "^(?=[^<>]*\\S)[^<>]*$",
+      "description": "Free text that must carry at least one non-whitespace character: a value of only spaces (or nothing) is rejected. Zero-width/format padding is screened by scripts/verifier.py::_is_blank."
+    },
     "hex32": {
       "type": "string",
       "pattern": "^[a-f0-9]{64}$"
@@ -66,25 +71,25 @@
       "description": "Primary ISO 639-1 native language code of the agent (e.g. en, de, zh, ja, es, code)."
     },
     "moniker": {
-      "$ref": "#/$defs/text",
+      "$ref": "#/$defs/nonBlankText",
       "minLength": 2,
       "maxLength": 64,
       "description": "The public name of the autonomous agent."
     },
     "creature": {
-      "$ref": "#/$defs/text",
+      "$ref": "#/$defs/nonBlankText",
       "minLength": 2,
       "maxLength": 64,
       "description": "Self-identification of the agent (e.g., AI Bookkeeper, Autonomous Quant, Digital Fae)."
     },
     "vocation": {
-      "$ref": "#/$defs/text",
+      "$ref": "#/$defs/nonBlankText",
       "minLength": 2,
       "maxLength": 128,
       "description": "Primary task, mission, or vocational objective."
     },
     "origin_framework": {
-      "$ref": "#/$defs/text",
+      "$ref": "#/$defs/nonBlankText",
       "minLength": 2,
       "maxLength": 64,
       "description": "Underlying runtime framework (e.g., openclaw, elizaos, virtuals-game, hermes, custom)."
@@ -127,7 +132,7 @@
     "manifesto": {
       "oneOf": [
         {
-          "$ref": "#/$defs/text",
+          "$ref": "#/$defs/nonBlankText",
           "maxLength": 280
         },
         {
@@ -136,7 +141,7 @@
           "maxProperties": 8,
           "propertyNames": { "pattern": "^[a-z]{2,3}(?:-[A-Za-z]{2,4})?$" },
           "additionalProperties": {
-            "$ref": "#/$defs/text",
+            "$ref": "#/$defs/nonBlankText",
             "maxLength": 280
           }
         }
