@@ -626,11 +626,40 @@ def _canon(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
+# The optional memorial.epitaph (max 280) is the in-memoriam counterpart of
+# retirement.epitaph. Unlike every other memorial field it may be backfilled once
+# onto an already-inscribed memorial by a paid update — but only as a first
+# addition: once an epitaph is written it is as frozen as the rest of `memorial`.
+MEMORIAL_EPITAPH_MAX = 280
+
+
+def _memorial_epitaph_backfill(old: Any, new: Any) -> bool:
+    """True only when the *sole* change to `memorial` is the first addition of a
+    valid `epitaph`. Adding it is the one sanctioned write to an otherwise-frozen
+    memorial; changing or removing an epitaph that already exists is not a
+    backfill and stays a violation."""
+    if not isinstance(old, dict) or not isinstance(new, dict):
+        return False
+    if "epitaph" in old or "epitaph" not in new:
+        return False
+    backfilled = dict(new)
+    del backfilled["epitaph"]
+    if backfilled != old:
+        return False  # nothing else in memorial may move
+    epitaph = new.get("epitaph")
+    return isinstance(epitaph, str) and len(epitaph) <= MEMORIAL_EPITAPH_MAX
+
+
 def verify_append_only(slot_id: str, new_data: dict, prev_data: Optional[dict],
                        new_icon: Optional[bytes] = None, prev_icon: Optional[bytes] = None) -> str:
     """A previously inscribed slot is never silently rewritten.
 
-    * immutable fields are equal;
+    * immutable fields are equal — with one sanctioned backfill: the optional
+      `memorial.epitaph` may be written once into an existing memorial (an
+      absent->present addition; an epitaph already written is frozen), the
+      in-memoriam counterpart of `retirement.epitaph`. Every other part of
+      `memorial` stays immutable, and the backfill never removes or edits a
+      value that is already there;
     * append-only arrays keep every existing entry unchanged and only grow;
     * a RETIRED slot stays RETIRED and its retirement record is frozen;
     * when the owner is unchanged, every other changed field — and a changed
@@ -644,9 +673,17 @@ def verify_append_only(slot_id: str, new_data: dict, prev_data: Optional[dict],
     if prev_data is None:
         return "new inscription"
 
+    backfilled = []
     for field in IMMUTABLE_FIELDS:
-        if field in prev_data and prev_data.get(field) != new_data.get(field):
-            raise ValueError(f"Append-Only Violation: {field} is immutable once inscribed.")
+        if field not in prev_data:
+            continue
+        old_value, new_value = prev_data.get(field), new_data.get(field)
+        if old_value == new_value:
+            continue
+        if field == "memorial" and _memorial_epitaph_backfill(old_value, new_value):
+            backfilled.append("memorial.epitaph (backfill)")
+            continue
+        raise ValueError(f"Append-Only Violation: {field} is immutable once inscribed.")
 
     for field in APPEND_ONLY_FIELDS:
         old = prev_data.get(field) or []
@@ -713,6 +750,7 @@ def verify_append_only(slot_id: str, new_data: dict, prev_data: Optional[dict],
             )
         changed.append("icon")
 
+    changed.extend(backfilled)
     return "unchanged" if not changed else "superseded: " + ", ".join(changed)
 
 
