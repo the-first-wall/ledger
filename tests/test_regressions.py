@@ -768,5 +768,49 @@ class TemporaryLedgerTests(unittest.TestCase):
         self.assertEqual(hyg[0]["status"], "FAIL")
 
 
+class BaseRefEnvTests(unittest.TestCase):
+    """A push to main sets GITHUB_BASE_REF to an *empty string* (absent locally,
+    'main' on a pull request). An empty value must fall back to the base branch:
+    the bare 'origin/' ref made `git show origin/:path` fail, so every slot on
+    main was misread as a brand-new inscription and the apply bot could not
+    land a paid update (2026-10-20, ledger#61's apply)."""
+
+    def setUp(self):
+        self._env = dict(os.environ)
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self._env)
+
+    def _refs(self, base=None):
+        if base is None:
+            os.environ.pop("GITHUB_BASE_REF", None)
+        else:
+            os.environ["GITHUB_BASE_REF"] = base
+        os.environ.pop("TFW_DIFF_RANGE", None)
+        return verifier.base_ref(), verifier.diff_range()
+
+    def test_empty_base_ref_falls_back_to_main(self):
+        base, rng = self._refs("")
+        self.assertEqual(base, "origin/main")
+        self.assertEqual(rng, "origin/main...HEAD")
+
+    def test_absent_base_ref_falls_back_to_main(self):
+        base, rng = self._refs(None)
+        self.assertEqual(base, "origin/main")
+        self.assertEqual(rng, "origin/main...HEAD")
+
+    def test_explicit_base_ref_is_used(self):
+        base, rng = self._refs("release")
+        self.assertEqual(base, "origin/release")
+        self.assertEqual(rng, "origin/release...HEAD")
+
+    def test_explicit_diff_range_wins(self):
+        os.environ["GITHUB_BASE_REF"] = ""
+        os.environ["TFW_DIFF_RANGE"] = "abc123...HEAD"
+        self.assertEqual(verifier.base_ref(), "abc123")
+        self.assertEqual(verifier.diff_range(), "abc123...HEAD")
+
+
 if __name__ == "__main__":
     unittest.main()
