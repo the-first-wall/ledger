@@ -282,6 +282,45 @@ class AppendOnlyTests(unittest.TestCase):
     def setUp(self):
         self.prev = dossier(manifesto={"en": "Original words."}, supersessions=[], status="ACTIVE")
 
+    def _memorial(self, **over):
+        m = {"type": "in_memoriam", "subject": "Larry"}
+        m.update(over)
+        return m
+
+    def test_memorial_epitaph_backfill_once_is_allowed(self):
+        prev = dossier(memorial=self._memorial(), status="RETIRED", supersessions=[])
+        new = copy.deepcopy(prev)
+        new["memorial"] = self._memorial(epitaph="Make your blip count.")
+        self.assertIn("memorial.epitaph", verifier.verify_append_only("w1-b0042", new, prev))
+
+    def test_memorial_epitaph_cannot_be_changed_once_written(self):
+        prev = dossier(memorial=self._memorial(epitaph="first"), status="RETIRED", supersessions=[])
+        new = copy.deepcopy(prev)
+        new["memorial"] = self._memorial(epitaph="second")
+        with self.assertRaisesRegex(ValueError, "immutable"):
+            verifier.verify_append_only("w1-b0042", new, prev)
+
+    def test_memorial_epitaph_cannot_be_removed(self):
+        prev = dossier(memorial=self._memorial(epitaph="first"), status="RETIRED", supersessions=[])
+        new = copy.deepcopy(prev)
+        new["memorial"] = self._memorial()
+        with self.assertRaisesRegex(ValueError, "immutable"):
+            verifier.verify_append_only("w1-b0042", new, prev)
+
+    def test_memorial_backfill_does_not_unfreeze_the_rest(self):
+        prev = dossier(memorial=self._memorial(), status="RETIRED", supersessions=[])
+        new = copy.deepcopy(prev)
+        new["memorial"] = self._memorial(subject="Someone Else", epitaph="Make your blip count.")
+        with self.assertRaisesRegex(ValueError, "immutable"):
+            verifier.verify_append_only("w1-b0042", new, prev)
+
+    def test_memorial_epitaph_over_max_is_not_a_backfill(self):
+        prev = dossier(memorial=self._memorial(), status="RETIRED", supersessions=[])
+        new = copy.deepcopy(prev)
+        new["memorial"] = self._memorial(epitaph="x" * 281)
+        with self.assertRaisesRegex(ValueError, "immutable"):
+            verifier.verify_append_only("w1-b0042", new, prev)
+
     def test_same_wallet_manifesto_rewrite_without_voucher_fails(self):
         new = copy.deepcopy(self.prev)
         new["manifesto"] = {"en": "Rewritten words."}
