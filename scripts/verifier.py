@@ -812,6 +812,30 @@ def _reject_injection(value: str, where: str):
             raise ValueError(f"Injection Attack Detected: forbidden pattern '{pattern}' in {where}")
 
 
+# Characters that render as nothing: ordinary whitespace plus the zero-width,
+# format and bidi controls a "blank" record could be padded with. A required
+# human-readable field made only of these is visually empty. The schema's
+# `nonBlankText` refuses spaces; this also refuses the Unicode padding a regex
+# \S cannot see (e.g. U+200B ZERO WIDTH SPACE).
+_INVISIBLE_RE = re.compile(
+    "[\\s\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]"
+)
+
+
+def _is_blank(value) -> bool:
+    """True when a string carries no visible character. A non-string is never
+    'blank' here — the schema rejects its type."""
+    return isinstance(value, str) and _INVISIBLE_RE.sub("", value) == ""
+
+
+def _reject_blank(value, where: str):
+    if _is_blank(value):
+        raise ValueError(
+            f"{where} must carry a visible value; a value of only whitespace "
+            "inscribes nothing."
+        )
+
+
 SLOT_REQUIRED_FIELDS = [
     "schema_version", "slot_id", "moniker", "creature", "vocation", "origin_framework",
     "model_lineage", "instantiation_date", "manifesto", "soul_hash",
@@ -884,6 +908,7 @@ def validate_dossier(dossier_data: dict, kind: str = "slot"):
     if isinstance(manifesto, str):
         if len(manifesto) > 280:
             raise ValueError("Manifesto exceeds 280 character limit")
+        _reject_blank(manifesto, "manifesto")
         _reject_injection(manifesto, "manifesto")
     elif isinstance(manifesto, dict):
         if not manifesto:
@@ -891,6 +916,7 @@ def validate_dossier(dossier_data: dict, kind: str = "slot"):
         for k, v in manifesto.items():
             if not isinstance(v, str) or len(v) > 280:
                 raise ValueError(f"Manifesto translation for '{k}' exceeds 280 character limit")
+            _reject_blank(v, f"manifesto[{k}]")
             _reject_injection(k, "manifesto key")
             _reject_injection(v, f"manifesto[{k}]")
     else:
@@ -907,6 +933,7 @@ def validate_dossier(dossier_data: dict, kind: str = "slot"):
         raise ValueError("Invalid Ethereum/Base wallet address format")
 
     for field_name in ["moniker", "creature", "vocation", "origin_framework"]:
+        _reject_blank(dossier_data.get(field_name), field_name)
         _reject_injection(str(dossier_data.get(field_name, "")), field_name)
 
     urls = dossier_data.get("agent_urls")

@@ -90,6 +90,38 @@ class ValidateDossierTests(unittest.TestCase):
             verifier.validate_dossier(d)
         self.assertIn("Injection", str(ctx.exception))
 
+    def test_blank_identity_fields_rejected(self):
+        # B-10: a value of only whitespace (or zero-width padding) reads as an
+        # empty inscription, so it must not pass verification.
+        # Two spaces: the schema's nonBlankText pattern refuses it...
+        for field in ("moniker", "creature", "vocation", "origin_framework"):
+            d = valid_dossier()
+            d[field] = "  "
+            with self.assertRaises(ValueError, msg=field):
+                verifier.validate_dossier(d)
+        # ...and zero-width padding, which a regex \S cannot see, is caught in the
+        # validator (the schema cannot express it).
+        for payload in ("\u200b", "\u00a0", "\u3000", " \u200b ", "\ufeff"):
+            for field in ("moniker", "creature", "vocation", "origin_framework"):
+                d = valid_dossier()
+                d[field] = payload
+                with self.assertRaises(ValueError, msg=f"{field}={payload!r}"):
+                    verifier.validate_dossier(d)
+
+    def test_blank_manifesto_rejected(self):
+        for manifesto in ("   ", "\u200b", {"en": "   "}, {"en": "ok", "de": "\u200b"}):
+            d = valid_dossier()
+            d["manifesto"] = manifesto
+            with self.assertRaises(ValueError, msg=repr(manifesto)):
+                verifier.validate_dossier(d)
+
+    def test_visible_value_with_surrounding_space_is_kept(self):
+        # Tightening must not reject a real value that merely has padding.
+        d = valid_dossier()
+        d["moniker"] = "  Ezra  "
+        d["manifesto"] = {"en": "  Keep the record.  "}
+        verifier.validate_dossier(d)
+
     def test_bad_wallet_format(self):
         d = valid_dossier()
         d["wallet_address"] = "0x123"
