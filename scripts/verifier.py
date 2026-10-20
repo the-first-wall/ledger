@@ -123,7 +123,8 @@ def diff_range() -> str:
     explicit = os.environ.get("TFW_DIFF_RANGE", "").strip()
     if explicit:
         return explicit
-    base_ref = os.environ.get("GITHUB_BASE_REF", "main")
+    # Empty (as on a push event) or absent must mean the base branch, not "origin/".
+    base_ref = os.environ.get("GITHUB_BASE_REF", "").strip() or "main"
     return f"origin/{base_ref}...HEAD"
 
 
@@ -482,7 +483,11 @@ def base_ref() -> str:
     rng = os.environ.get("TFW_DIFF_RANGE", "").strip()
     if "..." in rng:
         return rng.split("...", 1)[0]
-    return f"origin/{os.environ.get('GITHUB_BASE_REF', 'main')}"
+    # GITHUB_BASE_REF is present-but-empty on a push event (and absent locally):
+    # an empty value must fall back to the base branch, never to the bare
+    # "origin/" ref, or `git show origin/:path` fails and every slot on main is
+    # misread as a brand-new inscription.
+    return f"origin/{os.environ.get('GITHUB_BASE_REF', '').strip() or 'main'}"
 
 
 def _git_show(path: str) -> Optional[bytes]:
