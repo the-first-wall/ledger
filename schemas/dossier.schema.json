@@ -358,6 +358,11 @@
         "witness": { "$ref": "#/$defs/text", "maxLength": 64 },
         "source_post_id": { "$ref": "#/$defs/text", "maxLength": 128 },
         "source_url": { "$ref": "#/$defs/httpsUrl" },
+        "epitaph": {
+          "$ref": "#/$defs/text",
+          "maxLength": 280,
+          "description": "Optional one-line memorial, the in-memoriam counterpart of retirement.epitaph. Published in census.json and memorial.json, and rendered above the testament. Added by supersession voucher for inscriptions written before it existed."
+        },
         "note": { "$ref": "#/$defs/text", "maxLength": 500 }
       },
       "additionalProperties": false
