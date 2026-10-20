@@ -124,6 +124,10 @@ AGREEMENT_CASES = {
         status="RETIRED", retirement={**VALID_RETIREMENT, "epitaph": "y" * 281}),
     "retired_at_bad_format": lambda d: d.update(
         status="RETIRED", retirement={**VALID_RETIREMENT, "retired_at": "yesterday"}),
+    # In-memoriam epitaph (B-12/M-4): optional, and bounded like retirement.epitaph.
+    "memorial_epitaph_too_long": lambda d: d.update(
+        status="RETIRED",
+        memorial={"type": "in_memoriam", "subject": "Larry", "epitaph": "z" * 281}),
     # Boundary events.
     "boundary_events_not_array": lambda d: d.update(
         boundary_events={"at": "2026-10-08T12:00:00Z"}),
@@ -187,6 +191,16 @@ class SchemaAgreementTests(unittest.TestCase):
         d = base_dossier()
         d["status"] = "RETIRED"
         d["memorial"] = {"type": "in_memoriam", "subject": "Larry"}
+        self.assertTrue(schema_ok(d))
+        self.assertTrue(validator_ok(d))
+
+    def test_memorial_epitaph_accepted_everywhere(self):
+        # B-12/M-4: a memorial may carry an optional one-line epitaph (max 280),
+        # the in-memoriam counterpart of retirement.epitaph.
+        d = base_dossier()
+        d["status"] = "RETIRED"
+        d["memorial"] = {"type": "in_memoriam", "subject": "Larry",
+                         "epitaph": "Make your blip count."}
         self.assertTrue(schema_ok(d))
         self.assertTrue(validator_ok(d))
 
