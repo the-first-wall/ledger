@@ -541,8 +541,11 @@ def pricing_for(slot_number_: int) -> Dict[str, Any]:
 def _latest_timestamp(slot_dir: str, slots: List[str]) -> str:
     """Deterministic 'last_updated': the newest timestamp appearing anywhere in
     the ledger content (not the wall clock), so a regenerated file is
-    byte-identical on any machine. Considers timestamp_verified and each
-    supersession's superseded_at."""
+    byte-identical on any machine. Considers timestamp_verified, each
+    supersession's superseded_at and each settled fee's update_settlements[].at
+    — a content update (kind "update") and a change of owner (kind "transfer")
+    alike, so an applied update or transfer moves last_updated. The verifier's
+    state.last_updated check re-derives this independently."""
     stamps: List[str] = []
     for slot_file in slots:
         data = load_dossier(slot_dir, slot_file)
@@ -553,6 +556,10 @@ def _latest_timestamp(slot_dir: str, slots: List[str]) -> str:
             v = voucher.get("superseded_at")
             if isinstance(v, str) and v:
                 stamps.append(v)
+        for fee in data.get("update_settlements", []) or []:
+            at = fee.get("at") if isinstance(fee, dict) else None
+            if isinstance(at, str) and at:
+                stamps.append(at)
     return max(stamps) if stamps else ""
 
 
