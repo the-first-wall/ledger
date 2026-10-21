@@ -334,5 +334,87 @@ class CheckLogTests(unittest.TestCase):
         self.assertEqual(log.records[0]["detail"], "all good")
 
 
+class LastUpdatedTests(unittest.TestCase):
+    """B-1: state.last_updated must move with settled update and transfer fees,
+    and the verifier must catch it when it does not."""
+
+    SLOTS = {
+        "w1-b0001": {
+            "timestamp_verified": "2026-10-07T11:40:00Z",
+            "supersessions": [{"superseded_at": "2026-10-12T22:38:05Z"}],
+            "update_settlements": [{"kind": "update", "at": "2026-10-12T22:48:28Z"}],
+        },
+        "w1-b0002": {
+            "timestamp_verified": "2026-10-08T17:00:00Z",
+            "update_settlements": [
+                {"kind": "update", "at": "2026-10-12T22:59:48Z"},
+                {"kind": "transfer", "at": "2026-10-20T19:17:10Z"},
+            ],
+        },
+    }
+
+    def _ledger(self, root, slots, last_updated=None):
+        slot_dir = core.ledger_w1_dir(root)
+        os.makedirs(slot_dir)
+        for sid, body in slots.items():
+            with open(os.path.join(slot_dir, sid + ".json"), "w", encoding="utf-8") as fh:
+                json.dump(body, fh)
+        if last_updated is not None:
+            with open(os.path.join(root, "state.json"), "w", encoding="utf-8") as fh:
+                json.dump({"last_updated": last_updated}, fh)
+        return slot_dir
+
+    def test_latest_timestamp_counts_update_and_transfer_fees(self):
+        for kind in ("update", "transfer"):
+            slots = copy.deepcopy(self.SLOTS)
+            slots["w1-b0002"]["update_settlements"][1]["kind"] = kind
+            with tempfile.TemporaryDirectory() as root:
+                slot_dir = self._ledger(root, slots)
+                got = core._latest_timestamp(slot_dir, core.list_slot_files(slot_dir))
+                self.assertEqual(got, "2026-10-20T19:17:10Z", kind)
+
+    def test_latest_timestamp_without_fees_unchanged(self):
+        slots = {"w1-b0001": {"timestamp_verified": "2026-10-07T11:40:00Z",
+                              "supersessions": [{"superseded_at": "2026-10-08T13:20:00Z"}]}}
+        with tempfile.TemporaryDirectory() as root:
+            slot_dir = self._ledger(root, slots)
+            self.assertEqual(core._latest_timestamp(slot_dir, core.list_slot_files(slot_dir)),
+                             "2026-10-08T13:20:00Z")
+
+    def test_verifier_passes_on_current_value(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._ledger(root, self.SLOTS, "2026-10-20T19:17:10Z")
+            detail = verifier.verify_last_updated(root)
+            self.assertIn("w1-b0002 update_settlements[1].at", detail)
+
+    def test_verifier_fails_on_stale_value(self):
+        # The exact B-1 state: last_updated stuck at the newest supersession.
+        with tempfile.TemporaryDirectory() as root:
+            self._ledger(root, self.SLOTS, "2026-10-12T22:38:05Z")
+            with self.assertRaisesRegex(ValueError, r"w1-b0002 update_settlements\[1\]\.at"):
+                verifier.verify_last_updated(root)
+
+    def test_verifier_fails_on_future_value(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._ledger(root, self.SLOTS, "2026-10-21T00:00:00Z")
+            with self.assertRaisesRegex(ValueError, "later than every content timestamp"):
+                verifier.verify_last_updated(root)
+
+    def test_verifier_is_independent_of_generator(self):
+        # A generator regression must not be able to bless itself.
+        with tempfile.TemporaryDirectory() as root:
+            self._ledger(root, self.SLOTS, "2026-10-12T22:38:05Z")
+            orig = core._latest_timestamp
+            core._latest_timestamp = lambda *_a, **_k: "2026-10-12T22:38:05Z"
+            try:
+                with self.assertRaises(ValueError):
+                    verifier.verify_last_updated(root)
+            finally:
+                core._latest_timestamp = orig
+
+    def test_committed_state_is_current(self):
+        verifier.verify_last_updated(REPO)
+
+
 if __name__ == "__main__":
     unittest.main()

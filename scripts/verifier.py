@@ -21,7 +21,9 @@ Invariants Enforced:
     no metadata chunks) — checked, never rewritten.
  7. Soul-hash integrity (must hash a real manifest, never the empty-string digest).
  8. Replay protection across EVERY transaction field in the whole ledger.
- 9. State-root integrity (state.json, index.json, settlements.json equal their derivation).
+ 9. State-root integrity (state.json, index.json, settlements.json equal their derivation;
+    state.last_updated is the newest content timestamp in the ledger — vouchers and
+    settled update/transfer fees included — re-derived independently of the generator).
 10. Anchor integrity (recorded anchors exist on chain, were sent by the registered
     signer, and carry the recorded root).
 11. Claim signature (a dossier is bound to its payment by an EIP-191 signature of
@@ -1279,6 +1281,68 @@ def verify_state_files(base_dir: str):
         print(f"  [✓] {rel} matches the derived state root.")
 
 
+def _parse_utc(value: str, where: str):
+    from datetime import datetime, timezone
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise ValueError(f"{where} is not an RFC 3339 timestamp: {value!r}")
+    if dt.tzinfo is None:
+        raise ValueError(f"{where} has no timezone: {value!r}")
+    return dt.astimezone(timezone.utc)
+
+
+def content_timestamps(base_dir: str) -> List[Tuple[str, str]]:
+    """Every (where, timestamp) that marks a change of ledger content.
+
+    Deliberately NOT ledger_core._latest_timestamp: state.root_integrity already
+    compares state.json with the generator, so a field the generator forgets
+    (B-1: settled update fees were ignored and last_updated stood still for 8
+    days with every check green) is only caught by an independent derivation."""
+    slot_dir = core.ledger_w1_dir(base_dir)
+    found: List[Tuple[str, str]] = []
+    for slot_file in core.list_slot_files(slot_dir):
+        d = core.load_dossier(slot_dir, slot_file)
+        sid = slot_file[:-5]
+        if isinstance(d.get("timestamp_verified"), str) and d["timestamp_verified"]:
+            found.append((f"{sid} timestamp_verified", d["timestamp_verified"]))
+        for field, key in (("supersessions", "superseded_at"), ("update_settlements", "at")):
+            for i, entry in enumerate(d.get(field) or []):
+                v = entry.get(key) if isinstance(entry, dict) else None
+                if isinstance(v, str) and v:
+                    found.append((f"{sid} {field}[{i}].{key}", v))
+    return found
+
+
+def verify_last_updated(base_dir: str) -> str:
+    """state.json's last_updated must equal the newest content timestamp: no
+    voucher, update fee or transfer fee may postdate it, and it may not claim a
+    change that no record carries."""
+    with open(os.path.join(base_dir, "state.json"), "r", encoding="utf-8") as fh:
+        published = json.load(fh).get("last_updated")
+    stamps = content_timestamps(base_dir)
+    if not stamps:
+        if published:
+            raise ValueError(f"state.last_updated is {published!r} but the ledger holds no timestamp")
+        return "empty ledger, last_updated empty"
+    if not isinstance(published, str) or not published:
+        raise ValueError("state.last_updated is missing")
+    pub = _parse_utc(published, "state.last_updated")
+    parsed = [(where, raw, _parse_utc(raw, where)) for where, raw in stamps]
+    newest_where, newest_raw, newest = max(parsed, key=lambda t: t[2])
+    if newest > pub:
+        raise ValueError(
+            f"Stale state: {newest_where} {newest_raw} is newer than state.last_updated "
+            f"{published}. Run `python scripts/generate_state.py`."
+        )
+    if pub > newest:
+        raise ValueError(
+            f"state.last_updated {published} is later than every content timestamp "
+            f"(newest: {newest_where} {newest_raw})"
+        )
+    return f"last_updated {published} = newest content ({newest_where})"
+
+
 def load_anchors(base_dir: str) -> list:
     path = os.path.join(base_dir, "ledger", "anchors.json")
     if not os.path.exists(path):
@@ -2229,6 +2293,7 @@ def run_verification(base_dir: str, *, skip_rpc: bool = False, rpc_scope: str = 
     log.guard("state.root_integrity",
               lambda: verify_state_files(base_dir) or
               "state.json, index.json & settlements.json match derivation")
+    log.guard("state.last_updated", lambda: verify_last_updated(base_dir))
 
     # Anchors: shape offline, existence/signer/calldata on chain.
     try:

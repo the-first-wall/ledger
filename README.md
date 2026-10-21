@@ -137,6 +137,7 @@ python scripts/verifier.py --skip-rpc      # every offline invariant
 python scripts/verifier.py --rpc-scope all # …plus every settlement and the latest anchor on Base
 python scripts/assign_slots.py --dry-run   # where the pending claims will be placed
 python scripts/apply_updates.py --dry-run  # which pending update requests the bot will apply
+python scripts/discovery_watch.py          # where we rank in the x402 Bazaar search (read-only, free GET)
 python scripts/post_update.py <slot_id>    # turn your edited block into an update request (the PR holds that and nothing else)
 python scripts/sign_claim.py --verify ledger/claims/<tx>.json   # who signed a claim
 ```
