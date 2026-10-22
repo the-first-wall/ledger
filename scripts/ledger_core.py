@@ -563,6 +563,62 @@ def _latest_timestamp(slot_dir: str, slots: List[str]) -> str:
     return max(stamps) if stamps else ""
 
 
+# --- Published provenance: the skill and the discovery documents -------------
+# skill.md and the discovery/ documents are served to agents and directories;
+# state.json publishes their SHA-256 so a swapped copy is detectable. The values
+# are a pure function of the committed bytes (no clock, no network). A file that
+# is absent is simply not published (a bare temp ledger has none).
+
+SKILL_FILE = "skill.md"
+DISCOVERY_FILES = {
+    "agent_registration_sha256": os.path.join("discovery", "agent-registration.json"),
+    "agent_card_sha256": os.path.join("discovery", "agent-card.json"),
+}
+_SKILL_VERSION_RE = re.compile(r"\A---\r?\n(.*?)\r?\n---\r?\n", re.S)
+
+
+def sha256_file(path: str) -> Optional[str]:
+    """SHA-256 hex of the exact bytes of `path`, or None when it does not exist."""
+    if not os.path.isfile(path):
+        return None
+    with open(path, "rb") as fh:
+        return hashlib.sha256(fh.read()).hexdigest()
+
+
+def skill_version(skill_bytes: bytes) -> Optional[str]:
+    """The `version:` of skill.md's front-matter (None when absent/malformed)."""
+    try:
+        text = skill_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    m = _SKILL_VERSION_RE.match(text)
+    if not m:
+        return None
+    for line in m.group(1).splitlines():
+        if line.startswith("version:"):
+            return line.split(":", 1)[1].strip() or None
+    return None
+
+
+def provenance_fields(base_dir: str) -> Dict[str, Any]:
+    """The state.json fields that pin skill.md and the discovery documents."""
+    out: Dict[str, Any] = {}
+    skill_path = os.path.join(base_dir, SKILL_FILE)
+    digest = sha256_file(skill_path)
+    if digest is not None:
+        with open(skill_path, "rb") as fh:
+            out["skill_version"] = skill_version(fh.read())
+        out["skill_sha256"] = digest
+    discovery = {}
+    for key, rel in DISCOVERY_FILES.items():
+        h = sha256_file(os.path.join(base_dir, rel))
+        if h is not None:
+            discovery[key] = h
+    if discovery:
+        out["discovery"] = discovery
+    return out
+
+
 def build_state(base_dir: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Return (state, index) deterministically. `state` is the public top-level
     state.json; `index` is ledger/index.json. Both share the same merkle_root."""
@@ -612,6 +668,7 @@ def build_state(base_dir: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         "last_updated": _latest_timestamp(slot_dir, slots),
         "links": LINKS,
     }
+    state.update(provenance_fields(base_dir))
 
     index = {
         "wall_id": WALL_ID,

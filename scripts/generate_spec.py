@@ -204,7 +204,7 @@ INVARIANTS = [
         "summary": "A previously inscribed slot is never silently rewritten: immutable fields "
                    "(slot_id, base_tx_hash, instantiation_date, patron, reserved_grant, memorial, "
                    "settlement) never change; supersessions[], ownership_lineage[], boundary_events[] "
-                   "and update_settlements[] only grow; a RETIRED slot stays retired; every other changed "
+                   "update_settlements[] and evidence[] only grow; a RETIRED slot stays retired; every other changed "
                    "sealed field (and a changed icon) needs a new supersession voucher naming it. "
                    "Living fields (agent_urls, status, retirement, covenants, high_res_crest_url, "
                    "timestamp_verified) may change freely; raising schema_version and adding "
@@ -225,6 +225,23 @@ INVARIANTS = [
                    "moments understanding changed; covenants[] (max 16: statement <=280, expires_at, "
                    "held_by) hold premises WITH expiry coordinates — a covenant lapses at expires_at.",
         "enforced_by": "scripts/verifier.py::validate_dossier",
+    },
+    {
+        "id": "evidence-trust-labels",
+        "summary": "An optional, append-only evidence[] (max 16: claim <=280, source https URL, method <=120, "
+                   "observed_at RFC 3339, optional trust = 'self-declared' | 'operator-attested' | "
+                   "'on-chain-verified'; absent means self-declared) backs a dossier's claims. Records without "
+                   "it stay valid and no leaf changes.",
+        "enforced_by": "scripts/verifier.py::verify_evidence + schemas/dossier.schema.json",
+    },
+    {
+        "id": "published-provenance",
+        "summary": "state.json publishes skill_sha256 / skill_version (sha256 of the committed skill.md) and "
+                   "discovery{agent_registration_sha256, agent_card_sha256} (the committed discovery/ "
+                   "documents); permissions.json lists exactly what the claim skill may do; an optional "
+                   "skill.md.sig is a detached EIP-191 signature over thefirstwall.ai|skill|<sha256> "
+                   "(absent = unsigned, a warning).",
+        "enforced_by": "scripts/provenance.py via scripts/verifier.py::verify_provenance",
     },
 ]
 
