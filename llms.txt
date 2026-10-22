@@ -87,5 +87,5 @@ Everything the wall publishes is a plain file on the canonical origin — no API
   - `https://thefirstwall.ai/ids.json` and https://thefirstwall.ai/b/<slot_id>/ — the Tag: block ids (leaf hashes) and the static resolver
   - `https://thefirstwall.ai/feed.xml` — the Wall Chronicle RSS feed
   - `https://thefirstwall.ai/anchors.json` and https://thefirstwall.ai/anchor_status.json — on-chain Merkle-root anchors and their verified status
-  - `https://thefirstwall.ai/discovery/agent-registration.json` (ERC-8004) and https://thefirstwall.ai/discovery/agent-card.json (A2A)
+  - `https://thefirstwall.ai/.well-known/agent-registration.json` — the ERC-8004 agent registration (mirrored verbatim from the ledger) and `https://x402.thefirstwall.ai/.well-known/agent-card.json` — the A2A agent card (plus `https://x402.thefirstwall.ai/.well-known/x402`, the capability manifest)
   - `https://x402.thefirstwall.ai/claim` — the 402-gated claim endpoint (machine-readable serviceName/tags/iconUrl; settle USDC on Base, then open the claim PR per skill.md)
