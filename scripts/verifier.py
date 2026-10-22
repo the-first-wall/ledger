@@ -65,6 +65,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ledger_core as core  # noqa: E402
 import content_safety as safety  # noqa: E402
 import claims  # noqa: E402
+import provenance  # noqa: E402
 import updates  # noqa: E402
 
 BASE_CHAIN_ID = 8453
@@ -623,7 +624,7 @@ LIVING_FIELDS = {
     "high_res_crest_url", "timestamp_verified",
 }
 # Arrays that may only grow; existing entries are byte-for-byte preserved.
-APPEND_ONLY_FIELDS = {"supersessions", "ownership_lineage", "boundary_events", "update_settlements"}
+APPEND_ONLY_FIELDS = {"supersessions", "ownership_lineage", "boundary_events", "update_settlements", "evidence"}
 # Fields that never change once inscribed, voucher or not.
 IMMUTABLE_FIELDS = {"slot_id", "base_tx_hash", "instantiation_date", "patron", "reserved_grant", "memorial",
                     "settlement"}
@@ -892,6 +893,54 @@ CLAIM_REQUIRED_FIELDS = [f for f in SLOT_REQUIRED_FIELDS if f not in ("slot_id",
     ["claim_signature"]
 
 
+EVIDENCE_TRUST_LABELS = ("self-declared", "operator-attested", "on-chain-verified")
+EVIDENCE_KEYS = {"claim", "source", "method", "observed_at", "trust"}
+EVIDENCE_REQUIRED = ("claim", "source", "method", "observed_at")
+EVIDENCE_CAPS = {"claim": 280, "method": 120, "source": 250}
+EVIDENCE_MAX_ITEMS = 16
+
+
+def verify_evidence(evidence) -> None:
+    """The optional `evidence[]` (absent is fine): at most 16 objects, each with a
+    claim (<=280), an https source (<=250), a method (<=120), an RFC 3339
+    observed_at and an optional trust label from the allowlist."""
+    if evidence is None:
+        return
+    if not isinstance(evidence, list):
+        raise ValueError("Evidence Violation: 'evidence' must be an array.")
+    if len(evidence) > EVIDENCE_MAX_ITEMS:
+        raise ValueError(f"Evidence Violation: 'evidence' holds {len(evidence)} entries; the maximum is "
+                         f"{EVIDENCE_MAX_ITEMS}.")
+    for i, item in enumerate(evidence):
+        where = f"evidence[{i}]"
+        if not isinstance(item, dict):
+            raise ValueError(f"Evidence Violation: {where} must be an object.")
+        extra = sorted(set(item) - EVIDENCE_KEYS)
+        if extra:
+            raise ValueError(f"Evidence Violation: {where} has unknown field(s) {extra}.")
+        for key in EVIDENCE_REQUIRED:
+            if key not in item or item[key] is None:
+                raise ValueError(f"Evidence Violation: {where} is missing required field '{key}'.")
+        for key in ("claim", "source", "method", "observed_at"):
+            if not isinstance(item[key], str):
+                raise ValueError(f"Evidence Violation: {where}.{key} must be a string.")
+        for key, cap in EVIDENCE_CAPS.items():
+            if len(item[key]) > cap:
+                raise ValueError(f"Evidence Violation: {where}.{key} exceeds {cap} characters.")
+        for key in ("claim", "method"):
+            _reject_blank(item[key], f"{where}.{key}")
+            _reject_injection(item[key], f"{where}.{key}")
+        source = item["source"]
+        if not re.match(r"^https://[^\s<>\"'`]+$", source):
+            raise ValueError(f"Evidence Violation: {where}.source must be an https URL.")
+        try:
+            _parse_utc(item["observed_at"], f"{where}.observed_at")
+        except ValueError:
+            raise ValueError(f"Evidence Violation: {where}.observed_at must be an RFC 3339 timestamp.")
+        if "trust" in item and item["trust"] not in EVIDENCE_TRUST_LABELS:
+            raise ValueError(f"Evidence Violation: {where}.trust must be one of {list(EVIDENCE_TRUST_LABELS)}.")
+
+
 def validate_dossier(dossier_data: dict, kind: str = "slot"):
     """Shape and content guards for a slot dossier (kind="slot") or a posted
     claim (kind="claim")."""
@@ -1076,6 +1125,9 @@ def validate_dossier(dossier_data: dict, kind: str = "slot"):
             held_by = item["held_by"]
             if not isinstance(held_by, str) or not held_by.strip():
                 raise ValueError(f"Covenant Violation: covenants[{i}].held_by must be a non-empty string.")
+
+    # Optional evidence[] (I-3): precise messages; the schema re-checks the same shape.
+    verify_evidence(dossier_data.get("evidence"))
 
     # Authoritative JSON Schema check (single source of truth for shape: required
     # fields, patterns, lengths, formats, allowlists). Runs after the hand-coded
@@ -1279,6 +1331,34 @@ def verify_state_files(base_dir: str):
                 f"Run `python scripts/generate_state.py`."
             )
         print(f"  [✓] {rel} matches the derived state root.")
+
+
+def verify_provenance(base_dir: str, log: "CheckLog") -> None:
+    """The published skill hash and signature, the permission manifest and the
+    discovery documents (I-1, I-2, I-10). An absent skill.md.sig is a WARN
+    (unsigned), never a FAIL; a forged or malformed one is a FAIL."""
+    try:
+        state = core.load_json_strict(os.path.join(base_dir, "state.json"))
+    except (ValueError, OSError) as e:
+        log.record("state.provenance", "FAIL", f"state.json unreadable: {e}")
+        return
+    # A bare ledger (no skill, manifest or discovery documents, nothing published in
+    # its state) has nothing to prove; the real repository always has all of them,
+    # and deleting one while state.json still publishes it fails below.
+    artefacts = [core.SKILL_FILE, provenance.PERMISSIONS_FILE, provenance.SKILL_SIG_FILE, "discovery"]
+    if not any(os.path.exists(os.path.join(base_dir, a_)) for a_ in artefacts) and \
+            not any(k in state for k in ("skill_sha256", "skill_version", "discovery")):
+        log.record("state.provenance", "PASS", "no skill, permission manifest or discovery documents in this ledger")
+        return
+    log.guard("skill.hash", lambda: provenance.check_skill_hash(base_dir, state))
+    try:
+        status, detail = provenance.check_skill_signature(base_dir)
+        log.record("skill.signature", "PASS" if status == "valid" else "WARN", detail)
+    except ValueError as e:
+        log.record("skill.signature", "FAIL", str(e))
+    log.guard("permissions.manifest",
+              lambda: provenance.check_permissions(base_dir, state, sorted(GENERATED_PATHS)))
+    log.guard("discovery.hashes", lambda: provenance.check_discovery(base_dir, state))
 
 
 def _parse_utc(value: str, where: str):
@@ -2294,6 +2374,7 @@ def run_verification(base_dir: str, *, skip_rpc: bool = False, rpc_scope: str = 
               lambda: verify_state_files(base_dir) or
               "state.json, index.json & settlements.json match derivation")
     log.guard("state.last_updated", lambda: verify_last_updated(base_dir))
+    verify_provenance(base_dir, log)
 
     # Anchors: shape offline, existence/signer/calldata on chain.
     try:

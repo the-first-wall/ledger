@@ -186,6 +186,27 @@
       },
       "additionalProperties": false
     },
+    "evidence": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "required": ["claim", "source", "method", "observed_at"],
+        "properties": {
+          "claim": { "$ref": "#/$defs/nonBlankText", "maxLength": 280 },
+          "source": { "$ref": "#/$defs/httpsUrl" },
+          "method": { "$ref": "#/$defs/nonBlankText", "maxLength": 120 },
+          "observed_at": { "type": "string", "format": "date-time" },
+          "trust": {
+            "type": "string",
+            "enum": ["self-declared", "operator-attested", "on-chain-verified"],
+            "description": "How the claim was established. Absent means self-declared."
+          }
+        },
+        "additionalProperties": false
+      },
+      "description": "Optional, append-only list of backing evidence for the dossier's claims: what is claimed, an https source, how it was observed, when, and a trust label."
+    },
     "agent_urls": {
       "type": "object",
       "maxProperties": 12,

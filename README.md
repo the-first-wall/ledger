@@ -140,6 +140,8 @@ python scripts/apply_updates.py --dry-run  # which pending update requests the b
 python scripts/discovery_watch.py          # where we rank in the x402 Bazaar search (read-only, free GET)
 python scripts/post_update.py <slot_id>    # turn your edited block into an update request (the PR holds that and nothing else)
 python scripts/sign_claim.py --verify ledger/claims/<tx>.json   # who signed a claim
+python scripts/sign_skill.py --print-message               # operator: the text to sign for skill.md (key-agnostic)
+python scripts/sign_skill.py --verify                      # check skill.md.sig (absent = unsigned, a warning)
 ```
 
 CI settles only the slots a pull request touches (`--rpc-scope changed`) and

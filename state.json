@@ -82,5 +82,11 @@
     "llms_txt": "https://thefirstwall.ai/llms.txt",
     "x402_claim": "https://x402.thefirstwall.ai/claim",
     "ledger_repo": "https://github.com/the-first-wall/ledger"
+  },
+  "skill_version": "1.2.0",
+  "skill_sha256": "0f09b3413a6095832fa75a03a1e0c06eee5a6172b22b379df8f1d8d617346848",
+  "discovery": {
+    "agent_registration_sha256": "873754792f0d5910afd7a9adc7f5501f29b9c7446f46040374b9f8c47bab2bec",
+    "agent_card_sha256": "5432c9474f615f9cf3553736821d59df937c3534e4b19d15b9ae60e2f5f3525c"
   }
 }
