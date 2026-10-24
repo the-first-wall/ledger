@@ -67,6 +67,15 @@ PAY_TO = "0xbbF4D6B954e97C2C4fbC4e89B7933cDD7e4D9f23"
 # anchor transaction is authentic only if it was sent by this gas-only signer;
 # the verifier checks every recorded anchor against the chain.
 ANCHOR_SIGNER = "0x39A8546448baFd5E98f513022A772555c2082465"
+
+# The wall's canonical ERC-8004 identity (ADDRESSES.md row 5). An ERC-721
+# tokenURI, and the token's owner, are mutable by the holder: the registration
+# file the wall publishes is only authoritative while the chain still points at
+# it, so the verifier re-checks ownerOf + tokenURI on chain on every full run.
+ERC8004_REGISTRY = "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432"
+ERC8004_AGENT_ID = 107162
+IDENTITY_HOLDER = "0xf5f4a8c8285aa409df46fd1673a86fb120b0d0fd"
+IDENTITY_TOKEN_URI = "https://thefirstwall.ai/.well-known/agent-registration.json"
 # The scheme of the root committed on chain: the Reckoning, an RFC 6962 Merkle
 # tree over the slots (see "The Reckoning" below), so every slot has an
 # inclusion proof against the anchored root. It is the only scheme. The anchors
