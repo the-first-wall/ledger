@@ -41,6 +41,10 @@ Invariants Enforced:
     buyer's update fee and — when cited — the on-chain sale payment are what
     the ledger verifies; the former owner stays on record; a retired block is
     not transferable).
+16. Identity (the wall's ERC-8004 identity, agentId 107162 in the Base registry,
+    is still held by the documented holder and its on-chain tokenURI still
+    points at the published registration file; both are mutable by the holder,
+    so they are re-checked against the chain, never trusted from a document).
 
 The verifier never writes to the checkout it verifies.
 """
@@ -1451,6 +1455,41 @@ def verify_anchor_record(entry: dict) -> str:
     return f"root {root[:12]}… tx {tx[:12]}…"
 
 
+def _decode_abi_string(data: str) -> str:
+    """Decode an ABI-encoded `string` return value (offset, length, bytes)."""
+    try:
+        raw = bytes.fromhex(data[2:] if data.startswith("0x") else data)
+        offset = int.from_bytes(raw[0:32], "big")
+        length = int.from_bytes(raw[offset:offset + 32], "big")
+        body = raw[offset + 32:offset + 32 + length]
+        if len(raw) < 32 or len(body) != length:
+            raise ValueError("truncated")
+        return body.decode("utf-8")
+    except (ValueError, TypeError) as e:
+        raise ValueError(f"Identity Violation: malformed tokenURI return value ({e})")
+
+
+def verify_identity_on_chain(*, rpc: RpcFn = rpc_call) -> str:
+    """The wall's ERC-8004 identity must still be held by core.IDENTITY_HOLDER and
+    its tokenURI must still be core.IDENTITY_TOKEN_URI (both mutable by the holder)."""
+    arg = format(core.ERC8004_AGENT_ID, "064x")
+
+    def call(selector: str) -> str:
+        return str(rpc("eth_call", [{"to": core.ERC8004_REGISTRY, "data": selector + arg}, "latest"]))
+
+    owner_word = call("0x6352211e")  # ownerOf(uint256)
+    owner = "0x" + owner_word[2:][-40:] if len(owner_word) >= 42 else owner_word
+    if owner.lower() != core.IDENTITY_HOLDER.lower():
+        raise ValueError(f"Identity Violation: agentId {core.ERC8004_AGENT_ID} is held by {owner}, "
+                         f"not the documented holder {core.IDENTITY_HOLDER}")
+    uri = _decode_abi_string(call("0xc87b56dd"))  # tokenURI(uint256)
+    if uri != core.IDENTITY_TOKEN_URI:
+        raise ValueError(f"Identity Violation: agentId {core.ERC8004_AGENT_ID} tokenURI is {uri!r}, "
+                         f"not {core.IDENTITY_TOKEN_URI!r}")
+    return (f"agentId {core.ERC8004_AGENT_ID} held by {owner[:12]}…; "
+            "tokenURI → the published registration file")
+
+
 def verify_anchor_on_chain(entry: dict, *, rpc: RpcFn = rpc_call) -> str:
     """The recorded anchor must exist on Base, be a successful self-send from the
     registered signer, and carry exactly <scheme>|<root> as calldata."""
@@ -2375,6 +2414,12 @@ def run_verification(base_dir: str, *, skip_rpc: bool = False, rpc_scope: str = 
               "state.json, index.json & settlements.json match derivation")
     log.guard("state.last_updated", lambda: verify_last_updated(base_dir))
     verify_provenance(base_dir, log)
+
+    # Identity: the ERC-8004 holder and tokenURI are mutable, so check the chain.
+    if skip_rpc:
+        log.record("identity.on_chain", "WARN", "skipped (--skip-rpc)")
+    else:
+        log.guard("identity.on_chain", lambda: verify_identity_on_chain(rpc=rpc))
 
     # Anchors: shape offline, existence/signer/calldata on chain.
     try:

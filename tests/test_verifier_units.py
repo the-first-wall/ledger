@@ -26,6 +26,25 @@ import ledger_core as core  # noqa: E402
 EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 
+def abi_string(text):
+    """ABI-encode a single `string` return value."""
+    raw = text.encode()
+    return "0x" + (32).to_bytes(32, "big").hex() + len(raw).to_bytes(32, "big").hex() + \
+        raw.ljust(-(-len(raw) // 32) * 32, b"\0").hex()
+
+
+def identity_eth_call(params, owner=None, uri=None):
+    """Answer the ERC-8004 ownerOf/tokenURI eth_calls a fake RPC receives."""
+    call = params[0]
+    if call["to"] != core.ERC8004_REGISTRY or call["data"][10:] != format(core.ERC8004_AGENT_ID, "064x"):
+        raise AssertionError(f"unexpected eth_call {call}")
+    if call["data"].startswith("0x6352211e"):
+        return "0x" + (owner or core.IDENTITY_HOLDER)[2:].lower().rjust(64, "0")
+    if call["data"].startswith("0xc87b56dd"):
+        return abi_string(uri or core.IDENTITY_TOKEN_URI)
+    raise AssertionError(f"unexpected eth_call {call}")
+
+
 def valid_dossier():
     return {
         "schema_version": "1.1.1",
@@ -414,6 +433,34 @@ class LastUpdatedTests(unittest.TestCase):
 
     def test_committed_state_is_current(self):
         verifier.verify_last_updated(REPO)
+
+
+class IdentityOnChainTests(unittest.TestCase):
+    """verify_identity_on_chain re-checks the mutable ERC-8004 owner and tokenURI."""
+
+    @staticmethod
+    def rpc(**kw):
+        def fake(method, params):
+            if method != "eth_call":
+                raise AssertionError(method)
+            return identity_eth_call(params, **kw)
+        return fake
+
+    def test_correct_owner_and_uri_pass(self):
+        detail = verifier.verify_identity_on_chain(rpc=self.rpc())
+        self.assertIn("107162", detail)
+        self.assertIn("0xf5f4a8c8", detail)
+
+    def test_owner_comparison_is_case_insensitive(self):
+        verifier.verify_identity_on_chain(rpc=self.rpc(owner=core.IDENTITY_HOLDER.upper().replace("0X", "0x")))
+
+    def test_wrong_owner_fails(self):
+        with self.assertRaisesRegex(ValueError, "Identity Violation:"):
+            verifier.verify_identity_on_chain(rpc=self.rpc(owner="0x" + "11" * 20))
+
+    def test_wrong_token_uri_fails(self):
+        with self.assertRaisesRegex(ValueError, "Identity Violation:"):
+            verifier.verify_identity_on_chain(rpc=self.rpc(uri="https://evil.example/registration.json"))
 
 
 if __name__ == "__main__":

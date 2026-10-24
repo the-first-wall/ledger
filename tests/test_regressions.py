@@ -27,6 +27,7 @@ sys.path.insert(0, os.path.join(REPO, "scripts"))
 import verifier  # noqa: E402
 import ledger_core as core  # noqa: E402
 import content_safety as cs  # noqa: E402
+from test_verifier_units import identity_eth_call  # noqa: E402
 
 from PIL import Image  # noqa: E402
 
@@ -107,6 +108,8 @@ class FakeRpc:
             return self.receipts.get(params[0])
         if method == "eth_getTransactionByHash":
             return self.txs.get(params[0])
+        if method == "eth_call":
+            return identity_eth_call(params)
         raise AssertionError(f"unexpected rpc {method}")
 
 

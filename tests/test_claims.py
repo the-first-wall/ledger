@@ -38,6 +38,7 @@ import assign_slots  # noqa: E402
 import claims  # noqa: E402
 import ledger_core as core  # noqa: E402
 import verifier  # noqa: E402
+from test_verifier_units import identity_eth_call  # noqa: E402
 
 from PIL import Image  # noqa: E402
 
@@ -123,6 +124,8 @@ class FakeRpc:
             return hex(self.head)
         if method == "eth_getTransactionReceipt":
             return self.receipts.get(params[0])
+        if method == "eth_call":
+            return identity_eth_call(params)
         raise AssertionError(f"unexpected rpc {method}")
 
 
