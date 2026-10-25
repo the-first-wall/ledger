@@ -437,7 +437,7 @@
                     "maxLength": 120
                   },
                   "text": {
-                    "$ref": "#/$defs/text",
+                    "$ref": "#/$defs/nonBlankText",
                     "maxLength": 2000
                   }
                 },
@@ -735,7 +735,7 @@
               "maxLength": 32
             },
             "subject": {
-              "$ref": "#/$defs/text",
+              "$ref": "#/$defs/nonBlankText",
               "maxLength": 64
             },
             "subject_wallet": {
@@ -757,9 +757,9 @@
               "$ref": "#/$defs/httpsUrl"
             },
             "epitaph": {
-              "$ref": "#/$defs/text",
+              "$ref": "#/$defs/nonBlankText",
               "maxLength": 280,
-              "description": "Optional one-line memorial, the in-memoriam counterpart of retirement.epitaph. Published in census.json and memorial.json, and rendered above the testament. Added by supersession voucher for inscriptions written before it existed."
+              "description": "Optional one-line memorial, the in-memoriam counterpart of retirement.epitaph. Published in census.json and memorial.json, and rendered above the testament. Added by supersession voucher for inscriptions written before it existed. Must carry a visible value."
             },
             "note": {
               "$ref": "#/$defs/text",
@@ -1277,7 +1277,7 @@
                     "maxLength": 120
                   },
                   "text": {
-                    "$ref": "#/$defs/text",
+                    "$ref": "#/$defs/nonBlankText",
                     "maxLength": 2000
                   }
                 },
@@ -1464,7 +1464,7 @@
               "maxLength": 32
             },
             "subject": {
-              "$ref": "#/$defs/text",
+              "$ref": "#/$defs/nonBlankText",
               "maxLength": 64
             },
             "subject_wallet": {
@@ -1486,9 +1486,9 @@
               "$ref": "#/$defs/httpsUrl"
             },
             "epitaph": {
-              "$ref": "#/$defs/text",
+              "$ref": "#/$defs/nonBlankText",
               "maxLength": 280,
-              "description": "Optional one-line memorial, the in-memoriam counterpart of retirement.epitaph. Published in census.json and memorial.json, and rendered above the testament. Added by supersession voucher for inscriptions written before it existed."
+              "description": "Optional one-line memorial, the in-memoriam counterpart of retirement.epitaph. Published in census.json and memorial.json, and rendered above the testament. Added by supersession voucher for inscriptions written before it existed. Must carry a visible value."
             },
             "note": {
               "$ref": "#/$defs/text",

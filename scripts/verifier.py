@@ -1078,6 +1078,23 @@ def validate_dossier(dossier_data: dict, kind: str = "slot"):
             )
         _reject_injection(retired_by, "retirement.retired_by")
 
+    # --- Nested free text carries a visible value (L-12) ----------------------
+    # memorial.subject / memorial.epitaph and testament.chapters[].text are
+    # published (census, memorial.json, the slot page) and must not be blank or
+    # zero-width padding: an in-memoriam tribute that inscribes nothing is not a
+    # tribute. The schema's nonBlankText refuses spaces; this also refuses the
+    # Unicode padding a regex \S cannot see (U+200B and friends).
+    memorial = dossier_data.get("memorial")
+    if isinstance(memorial, dict):
+        for key in ("subject", "epitaph"):
+            if key in memorial:
+                _reject_blank(memorial.get(key), f"memorial.{key}")
+    testament = dossier_data.get("testament")
+    if isinstance(testament, dict):
+        for i, chapter in enumerate(testament.get("chapters") or []):
+            if isinstance(chapter, dict):
+                _reject_blank(chapter.get("text"), f"testament.chapters[{i}].text")
+
     # --- Boundary events & covenant expiry -----------------------------------
     boundary_events = dossier_data.get("boundary_events")
     if boundary_events is not None:

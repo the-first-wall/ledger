@@ -128,6 +128,13 @@ AGREEMENT_CASES = {
     "memorial_epitaph_too_long": lambda d: d.update(
         status="RETIRED",
         memorial={"type": "in_memoriam", "subject": "Larry", "epitaph": "z" * 281}),
+    # L-12: nested free text must not be blank.
+    "memorial_subject_blank": lambda d: d.update(
+        status="RETIRED", memorial={"type": "in_memoriam", "subject": "  "}),
+    "memorial_epitaph_blank": lambda d: d.update(
+        status="RETIRED", memorial={"type": "in_memoriam", "subject": "Larry", "epitaph": "  "}),
+    "testament_chapter_text_blank": lambda d: d.update(
+        testament={"chapters": [{"heading": "I", "text": "  "}]}),
     # Boundary events.
     "boundary_events_not_array": lambda d: d.update(
         boundary_events={"at": "2026-10-08T12:00:00Z"}),
@@ -271,6 +278,20 @@ class ExtraGuardTests(unittest.TestCase):
             self.assertTrue(schema_ok(d), field)
             self.assertFalse(validator_ok(d), field)
 
+    def test_zero_width_in_nested_text_schema_cannot_see(self):
+        # L-12: the same zero-width padding in the nested fields the site publishes.
+        cases = {
+            "memorial.subject": lambda d: d.update(status="RETIRED", memorial={"type": "in_memoriam", "subject": "\u200b"}),
+            "memorial.epitaph": lambda d: d.update(status="RETIRED", memorial={"type": "in_memoriam", "subject": "Larry", "epitaph": "\u00ad"}),
+            "testament.chapters[0].text": lambda d: d.update(testament={"chapters": [{"heading": "I", "text": "\ufeff"}]}),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(field=name):
+                d = base_dossier()
+                mutate(d)
+                self.assertTrue(schema_ok(d), name)
+                self.assertFalse(validator_ok(d), name)
+
 
 class RetirementRuleMessagesTests(unittest.TestCase):
     """Precise ValueError messages for the retirement cross-rule both ways."""
@@ -309,6 +330,16 @@ class RetirementRuleMessagesTests(unittest.TestCase):
         d = base_dossier()
         d["boundary_events"] = [dict(VALID_BOUNDARY_EVENT) for _ in range(33)]
         with self.assertRaisesRegex(ValueError, "the maximum is 32"):
+            verifier.validate_dossier(d)
+
+    def test_nested_blank_messages(self):
+        d = base_dossier()
+        d.update(status="RETIRED", memorial={"type": "in_memoriam", "subject": "  "})
+        with self.assertRaisesRegex(ValueError, "memorial.subject"):
+            verifier.validate_dossier(d)
+        d = base_dossier()
+        d["testament"] = {"chapters": [{"heading": "I", "text": "  "}]}
+        with self.assertRaisesRegex(ValueError, r"testament.chapters\[0\].text"):
             verifier.validate_dossier(d)
 
     def test_covenants_bound(self):

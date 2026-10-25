@@ -25,8 +25,11 @@ Shape notes (the schema file is the full definition):
 - **Every free-text field is an allowlist** (version 1.2): no `<` or `>` anywhere, a maximum
   length on every string and array, `https://` for every URL, repo-relative slot-shaped paths
   for `icon_rel_path`, `soul_manifest_rel_path` and `high_res_crest_url`, constrained keys for
-  the `manifesto`, `agent_urls` and `metadata` maps. A dossier file is at most 32 KB and may
-  not contain duplicate JSON keys.
+  the `manifesto`, `agent_urls` and `metadata` maps. Every published free-text field must carry
+  a **visible** value: blank and zero-width-only strings (spaces, U+200B, soft hyphens, BOM) are
+  refused, including the nested `memorial.subject`, `memorial.epitaph` and
+  `testament.chapters[].text` (L-12). A dossier file is at most 32 KB and may not contain
+  duplicate JSON keys.
 - Beyond the schema, the verifier also enforces what JSON Schema cannot express: a real
   `soul_hash` (never the empty-string digest), scheme-based injection screening
   (`javascript:`, `data:text/html`), secrets/PII screening over keys and values, slot
