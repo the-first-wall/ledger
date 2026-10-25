@@ -1752,7 +1752,7 @@
       "message_v2": "thefirstwall.ai|claim|v2|<base_tx_hash>|<soul_hash>|<bundle_sha256>",
       "message_v1": "thefirstwall.ai|claim|<base_tx_hash>|<soul_hash> (legacy: payment identity only)",
       "message": "thefirstwall.ai|claim|v2|<base_tx_hash>|<soul_hash>|<bundle_sha256>",
-      "bundle_sha256": "SHA-256 of the UTF-8 bytes of the canonical JSON of the dossier with the signature/bundle fields stripped (keys sorted, compact separators, no ASCII escaping), concatenated with the exact committed icon bytes: sha256(canonical_json(dossier_stripped) || icon_bytes).",
+      "bundle_sha256": "SHA-256 of the UTF-8 bytes of the canonical JSON of the dossier with the signature/bundle fields stripped at every depth (claim_signature, claim_signature_version, claim_soul_hash, claim_bundle_sha256, update_signature, bundle_sha256) and the top-level assignment fields stripped (slot_id, icon_rel_path, soul_manifest_rel_path, settlement), keys sorted, compact separators, no ASCII escaping, concatenated with the exact committed icon bytes: sha256(canonical_json(dossier_stripped) || icon_bytes). The same rule hashes a claim file and the slot it is materialised into, so they agree.",
       "bundle_fields": [
         "claim_signature_version",
         "claim_soul_hash",
@@ -1785,7 +1785,7 @@
     },
     {
       "id": "claim-signature",
-      "summary": "claim_signature is an EIP-191 personal_sign by the paying wallet. At schema_version 1.3.0+ it is v2 and signs 'thefirstwall.ai|claim|v2|<base_tx_hash>|<soul_hash>|<bundle_sha256>', where bundle_sha256 = sha256(canonical_json(dossier minus signature fields) || exact committed icon bytes). Binding the bundle is what stops a courier from copying a valid claim and rewriting the words (manifesto/testament/agent_urls) or swapping the icon before merge: the verifier re-hashes the committed dossier + icon and rejects a mismatch while the block still carries its inscription bytes. v1 ('thefirstwall.ai|claim|<base_tx_hash>|<soul_hash>', payment identity only) stays valid for the two genesis inscriptions (1.1.1/1.2.0) and any record sealed under it; a v1 record is upgraded to v2 at its next paid update. Required on every claim and on every dossier from schema_version 1.2.0.",
+      "summary": "claim_signature is an EIP-191 personal_sign by the paying wallet. At schema_version 1.3.0+ it is v2 and signs 'thefirstwall.ai|claim|v2|<base_tx_hash>|<soul_hash>|<bundle_sha256>', where bundle_sha256 = sha256(canonical_json(dossier minus signature fields and the assignment fields slot_id/icon_rel_path/soul_manifest_rel_path/settlement) || exact committed icon bytes). Binding the bundle is what stops a courier from copying a valid claim and rewriting the words (manifesto/testament/agent_urls) or swapping the icon before merge: the verifier re-hashes the committed dossier + icon and rejects a mismatch while the block still carries its inscription bytes. v1 ('thefirstwall.ai|claim|<base_tx_hash>|<soul_hash>', payment identity only) stays valid for the two genesis inscriptions (1.1.1/1.2.0) and any record sealed under it; a v1 record is upgraded to v2 at its next paid update. Required on every claim and on every dossier from schema_version 1.2.0.",
       "enforced_by": "scripts/claims.py::verify_claim_signature + bundle_sha256"
     },
     {
@@ -1946,7 +1946,7 @@
     {
       "step": 4,
       "action": "sign",
-      "detail": "Sign 'thefirstwall.ai|claim|v2|<base_tx_hash>|<soul_hash>|<bundle_sha256>' with the paying wallet (EIP-191 personal_sign; scripts/sign_claim.py, or any wallet library), where bundle_sha256 = sha256(canonical_json(dossier minus the signature fields) || the exact committed icon bytes). Put the 65-byte signature in claim_signature and set claim_signature_version 'v2', claim_soul_hash and claim_bundle_sha256. Binding the bundle binds the words and the picture, not just the payment."
+      "detail": "Sign 'thefirstwall.ai|claim|v2|<base_tx_hash>|<soul_hash>|<bundle_sha256>' with the paying wallet (EIP-191 personal_sign; scripts/sign_claim.py, or any wallet library), where bundle_sha256 = sha256(canonical_json(dossier minus the signature fields and the assignment fields slot_id/icon_rel_path/soul_manifest_rel_path/settlement) || the exact committed icon bytes). Put the 65-byte signature in claim_signature and set claim_signature_version 'v2', claim_soul_hash and claim_bundle_sha256. Binding the bundle binds the words and the picture, not just the payment."
     },
     {
       "step": 4.5,

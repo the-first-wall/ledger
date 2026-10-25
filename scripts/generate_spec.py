@@ -46,7 +46,8 @@ INVARIANTS = [
         "summary": "claim_signature is an EIP-191 personal_sign by the paying wallet. At "
                    "schema_version 1.3.0+ it is v2 and signs "
                    "'thefirstwall.ai|claim|v2|<base_tx_hash>|<soul_hash>|<bundle_sha256>', where "
-                   "bundle_sha256 = sha256(canonical_json(dossier minus signature fields) || exact "
+                   "bundle_sha256 = sha256(canonical_json(dossier minus signature fields and the "
+                   "assignment fields slot_id/icon_rel_path/soul_manifest_rel_path/settlement) || exact "
                    "committed icon bytes). Binding the bundle is what stops a courier from copying a "
                    "valid claim and rewriting the words (manifesto/testament/agent_urls) or swapping "
                    "the icon before merge: the verifier re-hashes the committed dossier + icon and "
@@ -297,7 +298,8 @@ CLAIM_FLOW = [
     {"step": 4, "action": "sign",
      "detail": "Sign 'thefirstwall.ai|claim|v2|<base_tx_hash>|<soul_hash>|<bundle_sha256>' with the "
                "paying wallet (EIP-191 personal_sign; scripts/sign_claim.py, or any wallet library), where "
-               "bundle_sha256 = sha256(canonical_json(dossier minus the signature fields) || the exact "
+               "bundle_sha256 = sha256(canonical_json(dossier minus the signature fields and the "
+               "assignment fields slot_id/icon_rel_path/soul_manifest_rel_path/settlement) || the exact "
                "committed icon bytes). Put the 65-byte signature in claim_signature and set "
                "claim_signature_version 'v2', claim_soul_hash and claim_bundle_sha256. Binding the bundle "
                "binds the words and the picture, not just the payment."}, {"step": 4.5, "action": "api_hint",

@@ -758,6 +758,36 @@ class ClaimLedgerTests(unittest.TestCase):
         self.assertEqual(report["result"], "PASS", [c for c in report["checks"] if c["status"] == "FAIL"])
         self.assertEqual(status_of(f"claim:{TX1[:12]}.claim_signature", report)["status"], "PASS")
 
+    def test_v2_claim_materialised_into_a_slot_passes(self):
+        """L-14 regression: assignment adds slot_id / icon_rel_path /
+        soul_manifest_rel_path / settlement; the signed bundle must survive it."""
+        d = self._write_v2_claim()
+        assigned, skipped = self._assign(FakeRpc().settle(TX1, TEST_ADDR, HEAD - 1000, index=4))
+        self.assertEqual([a["slot_id"] for a in assigned], ["w1-b0001"], skipped)
+        report = verifier.run_verification(self.td, skip_rpc=True)
+        self.assertEqual(report["result"], "PASS", [c for c in report["checks"] if c["status"] == "FAIL"])
+        self.assertEqual(status_of("w1-b0001.claim_signature", report)["status"], "PASS")
+        with open(os.path.join(self.w1, "w1-b0001.json"), encoding="utf-8") as fh:
+            slot = json.load(fh)
+        for field in claims.ASSIGNED_FIELDS:
+            self.assertIn(field, slot)
+        with open(os.path.join(self.w1, "w1-b0001.webp"), "rb") as fh:
+            icon = fh.read()
+        self.assertEqual(claims.bundle_sha256(slot, icon), d["claim_bundle_sha256"])
+
+    def test_v2_materialised_slot_with_altered_manifesto_fails(self):
+        self._write_v2_claim()
+        self._assign(FakeRpc().settle(TX1, TEST_ADDR, HEAD - 1000, index=4))
+        path = os.path.join(self.w1, "w1-b0001.json")
+        with open(path, encoding="utf-8") as fh:
+            slot = json.load(fh)
+        slot["manifesto"] = {"en": "Rewritten after placement."}
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(core.render(slot))
+        self._generate()
+        report = verifier.run_verification(self.td, skip_rpc=True)
+        self.assertTrue(failing("w1-b0001.claim_signature", report))
+
     def test_claim_signed_by_the_wrong_wallet_fails(self):
         self._write_claim(key=OTHER_KEY)
         report = verifier.run_verification(self.td, skip_rpc=True)

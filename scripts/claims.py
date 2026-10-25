@@ -63,24 +63,31 @@ TRANSFER_MESSAGE_PREFIX = "thefirstwall.ai|transfer|"
 SIGNATURE_RE = re.compile(r"^0x[0-9a-fA-F]{130}$")
 HEX32_RE = re.compile(r"^[a-f0-9]{64}$")
 
-# Signature/hash fields are removed before the bundle is hashed, so the bundle is
-# stable across the claim→slot materialisation and across a re-computed
-# signature (a signature can never be hashed inside the thing it signs).
+# Signature/hash fields are removed (at every depth) before the bundle is hashed,
+# so the bundle is stable across a re-computed signature (a signature can never be
+# hashed inside the thing it signs).
 BUNDLE_STRIP_KEYS = frozenset({
     "claim_signature", "claim_signature_version", "claim_soul_hash", "claim_bundle_sha256",
     "update_signature", "bundle_sha256",
 })
+# What the assignment adds to a claim to make it a slot dossier. These are
+# derived from the settlement by the deterministic assignment rule — never chosen
+# by the claimant — so they are also removed (top level only) before hashing:
+# the bundle a claimant signs over their claim file is the same bundle the
+# verifier re-derives from the materialised slot dossier.
+ASSIGNED_FIELDS = ("slot_id", "icon_rel_path", "soul_manifest_rel_path", "settlement")
 BUNDLE_CANONICALIZATION = (
     "SHA-256 of the UTF-8 bytes of the canonical JSON of the dossier with the "
-    "signature/bundle fields stripped (keys sorted, compact separators, no ASCII "
-    "escaping), concatenated with the exact committed icon bytes: "
-    "sha256(canonical_json(dossier_stripped) || icon_bytes)."
+    "signature/bundle fields stripped at every depth (claim_signature, "
+    "claim_signature_version, claim_soul_hash, claim_bundle_sha256, update_signature, "
+    "bundle_sha256) and the top-level assignment fields stripped (slot_id, "
+    "icon_rel_path, soul_manifest_rel_path, settlement), keys sorted, compact "
+    "separators, no ASCII escaping, concatenated with the exact committed icon "
+    "bytes: sha256(canonical_json(dossier_stripped) || icon_bytes). The same rule "
+    "hashes a claim file and the slot it is materialised into, so they agree."
 )
 # Fields a posted claim never carries: it is a new inscription with no history.
 CLAIM_FORBIDDEN_FIELDS = ("ownership_lineage", "update_settlements")
-
-# What the assignment adds to a claim to make it a slot dossier.
-ASSIGNED_FIELDS = ("slot_id", "icon_rel_path", "soul_manifest_rel_path", "settlement")
 
 
 # --- The signature -----------------------------------------------------------
@@ -112,8 +119,10 @@ def _strip_bundle_keys(obj: Any) -> Any:
 def bundle_sha256(dossier: Dict[str, Any], icon_bytes: Optional[bytes]) -> str:
     """The deterministic bundle hash a v2 signature commits to. See
     BUNDLE_CANONICALIZATION for the exact rule. Never hashes the signature fields
-    themselves, so signing, re-signing and the claim→slot move all agree."""
-    canonical = json.dumps(_strip_bundle_keys(dossier), sort_keys=True,
+    themselves nor the assignment fields, so signing, re-signing and the
+    claim→slot materialisation all agree."""
+    body = {k: v for k, v in dossier.items() if k not in ASSIGNED_FIELDS}
+    canonical = json.dumps(_strip_bundle_keys(body), sort_keys=True,
                            separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     h = hashlib.sha256()
     h.update(canonical)
