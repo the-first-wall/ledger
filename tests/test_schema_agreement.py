@@ -143,6 +143,11 @@ AGREEMENT_CASES = {
         status="RETIRED", memorial={"type": "in_memoriam", "subject": "Larry", "epitaph": "  "}),
     "testament_chapter_text_blank": lambda d: d.update(
         testament={"chapters": [{"heading": "I", "text": "  "}]}),
+    # L-13: a memorial implies a RETIRED record (the site badges it IN MEMORIAM).
+    "memorial_without_retired_status": lambda d: d.update(
+        memorial={"type": "in_memoriam", "subject": "Larry"}),
+    "memorial_with_active_status": lambda d: d.update(
+        status="ACTIVE", memorial={"type": "in_memoriam", "subject": "Larry"}),
     # Boundary events.
     "boundary_events_not_array": lambda d: d.update(
         boundary_events={"at": "2026-10-08T12:00:00Z"}),
@@ -365,6 +370,12 @@ class RetirementRuleMessagesTests(unittest.TestCase):
         d["status"] = "RETIRED"
         d["retirement"] = {**VALID_RETIREMENT, "retired_by": "daniel"}
         with self.assertRaisesRegex(ValueError, "'self', 'operator:<handle>', or 'patron:<moniker>'"):
+            verifier.validate_dossier(d)
+
+    def test_memorial_requires_retired_status(self):
+        d = base_dossier()
+        d["memorial"] = {"type": "in_memoriam", "subject": "Larry"}
+        with self.assertRaisesRegex(ValueError, r"'memorial' is present but status is not 'RETIRED'"):
             verifier.validate_dossier(d)
 
     def test_retired_by_variants(self):
