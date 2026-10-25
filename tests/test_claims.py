@@ -189,6 +189,110 @@ class SignatureTests(unittest.TestCase):
         self.assertFalse(claims.requires_signature({"schema_version": "1.1.1"}))
         self.assertFalse(claims.requires_signature({"schema_version": "garbage"}))
 
+    def test_requires_bundle_signature_by_version(self):
+        self.assertFalse(claims.requires_bundle_signature({"schema_version": "1.2.0"}))
+        self.assertTrue(claims.requires_bundle_signature({"schema_version": "1.3.0"}))
+        self.assertTrue(claims.requires_bundle_signature({"schema_version": "2.0.0"}))
+
+    def test_v1_dossiers_still_verify(self):
+        # The superset rule: a record with no claim_signature_version is v1 and
+        # keeps verifying under the payment-identity message (slots #0001/#0002).
+        for slot in ("w1-b0001", "w1-b0002"):
+            with self.subTest(slot=slot):
+                d = core.load_json_strict(os.path.join(REPO, "ledger", "w1", f"{slot}.json"))
+                self.assertEqual(claims.claim_signature_version(d), "v1")
+                self.assertIn("signed by", claims.verify_claim_signature(d))
+
+
+# --------------------------------------------------------------------------- #
+# R-1b — the v2 bundle-bound claim signature (L-14): a copied claim cannot be
+# rewritten (altered words) or have its icon swapped.
+# --------------------------------------------------------------------------- #
+
+class BundleSignatureTests(unittest.TestCase):
+
+    def setUp(self):
+        self.td = tempfile.mkdtemp()
+        self.icon = make_icon(os.path.join(self.td, f"{TX1}.webp"))
+
+    def tearDown(self):
+        shutil.rmtree(self.td, ignore_errors=True)
+
+    def v2_claim(self, **over):
+        d = {
+            "schema_version": "1.3.0",
+            "primary_language": "en",
+            "moniker": "Claimant",
+            "creature": "Autonomous Test Probe",
+            "vocation": "Claiming a block the right way",
+            "origin_framework": "custom",
+            "model_lineage": [{"model_id": "probe", "provider": "local", "role": "tester"}],
+            "instantiation_date": "2026-10-11T12:00:00Z",
+            "manifesto": {"en": "I did not pick my block."},
+            "soul_hash": "a" * 64,
+            "wallet_address": TEST_ADDR,
+            "base_tx_hash": TX1,
+            "timestamp_verified": "2026-10-11T12:00:00Z",
+        }
+        d.update(over)
+        d["claim_signature"] = claims.sign_claim(d, TEST_KEY, self.icon, version="v2")
+        return d
+
+    def test_v2_message_is_exact(self):
+        self.assertEqual(claims.claim_message_v2("0xABC", "DEF", "AB" * 32),
+                         "thefirstwall.ai|claim|v2|0xabc|def|" + "ab" * 32)
+
+    def test_v2_roundtrip_with_the_committed_icon(self):
+        d = self.v2_claim()
+        self.assertEqual(d["claim_signature_version"], "v2")
+        self.assertRegex(d["claim_bundle_sha256"], r"^[0-9a-f]{64}$")
+        self.assertIn(TEST_ADDR, claims.verify_claim_signature(d, self.icon))
+        verifier.validate_dossier(d, kind="claim")
+
+    def test_altered_manifesto_fails(self):
+        d = self.v2_claim()
+        d["manifesto"] = {"en": "Actually I claim block #0001 for myself."}
+        with self.assertRaisesRegex(ValueError, "Claim Signature Violation"):
+            claims.verify_claim_signature(d, self.icon)
+
+    def test_altered_testament_and_agent_urls_fail(self):
+        for field, value in (("agent_urls", {"homepage": "https://evil.example.com"}),
+                             ("testament", {"chapters": [{"heading": "I", "text": "rewritten"}]})):
+            with self.subTest(field=field):
+                d = self.v2_claim()
+                d[field] = value
+                with self.assertRaisesRegex(ValueError, "Claim Signature Violation"):
+                    claims.verify_claim_signature(d, self.icon)
+
+    def test_swapped_icon_fails(self):
+        d = self.v2_claim()
+        other = make_icon(os.path.join(self.td, "other.webp"), colour=(200, 20, 10, 255))
+        with self.assertRaisesRegex(ValueError, "Claim Signature Violation"):
+            claims.verify_claim_signature(d, other)
+
+    def test_rewriting_the_bundle_field_is_caught_by_the_signature(self):
+        d = self.v2_claim()
+        d["claim_bundle_sha256"] = "f" * 64
+        with self.assertRaises(ValueError):
+            claims.verify_claim_signature(d, self.icon)
+
+    def test_no_icon_means_no_byte_check_but_the_signer_still_matters(self):
+        d = self.v2_claim()
+        self.assertIn("signed by", claims.verify_claim_signature(d))  # bytes unavailable: signer only
+        d["wallet_address"] = OTHER_ADDR
+        # Without the icon the byte check is skipped, so the signer mismatch is what fails.
+        with self.assertRaisesRegex(ValueError, "not by the paying wallet"):
+            claims.verify_claim_signature(d)
+
+    def test_v130_dossier_without_the_bundle_fields_is_refused(self):
+        d = self.v2_claim()
+        for field in ("claim_signature_version", "claim_soul_hash", "claim_bundle_sha256"):
+            with self.subTest(field=field):
+                broken = dict(d)
+                del broken[field]
+                with self.assertRaises(ValueError):
+                    verifier.validate_dossier(broken, kind="claim")
+
 
 # --------------------------------------------------------------------------- #
 # The claim schema (dossier minus the assigned fields, signature required)
@@ -513,6 +617,24 @@ class ClaimLedgerTests(unittest.TestCase):
         make_icon(os.path.join(self.cdir, f"{tx}.webp"))
         return d
 
+    def _write_v2_claim(self, tx=TX1, key=TEST_KEY, wallet=TEST_ADDR, **over):
+        """A posted v2 (bundle-bound) claim, as a claimant following Step 4 writes it."""
+        d = claim_dossier(tx=tx, wallet=wallet, sign=False, schema_version="1.3.0", **over)
+        manifest = {k: d[k] for k in ("moniker", "creature", "vocation", "origin_framework")}
+        raw = (json.dumps(manifest, indent=2) + "\n").encode()
+        with open(os.path.join(self.cdir, f"{tx}.soul.json"), "wb") as fh:
+            fh.write(raw)
+        d["soul_hash"] = hashlib.sha256(raw).hexdigest()
+        icon = make_icon(os.path.join(self.cdir, f"{tx}.webp"))
+        d["claim_signature"] = claims.sign_claim(d, key, icon, version="v2")
+        with open(os.path.join(self.cdir, f"{tx}.json"), "w", encoding="utf-8") as fh:
+            fh.write(core.render(d))
+        return d
+
+    def _rewrite_claim(self, tx, d):
+        with open(os.path.join(self.cdir, f"{tx}.json"), "w", encoding="utf-8") as fh:
+            fh.write(core.render(d))
+
     def _write_slot(self, slot_id, tx, **over):
         """A legacy (schema 1.1.1, unsigned) inscription, as the genesis slots are."""
         body = claim_dossier(tx=tx, sign=False, **over)
@@ -588,6 +710,26 @@ class ClaimLedgerTests(unittest.TestCase):
         self.assertIn("costs 1.00 USDC", status_of(f"claim:{TX1[:12]}.placement", report)["detail"])
         report = verifier.run_verification(self.td, rpc=rpc, rpc_scope="all")
         self.assertEqual(status_of(f"claim:{TX1[:12]}.placement", report)["status"], "WARN")
+
+    def test_v2_altered_manifesto_fails_verification(self):
+        d = self._write_v2_claim()
+        d["manifesto"] = {"en": "Actually, I claim block #0001 for myself."}
+        self._rewrite_claim(TX1, d)   # a courier kept the signature, rewrote the words
+        report = verifier.run_verification(self.td, skip_rpc=True)
+        self.assertTrue(failing(f"claim:{TX1[:12]}.claim_signature", report))
+        self.assertEqual(report["result"], "FAIL")
+
+    def test_v2_swapped_icon_fails_verification(self):
+        self._write_v2_claim()
+        make_icon(os.path.join(self.cdir, f"{TX1}.webp"), colour=(200, 20, 10, 255))  # swap the icon
+        report = verifier.run_verification(self.td, skip_rpc=True)
+        self.assertTrue(failing(f"claim:{TX1[:12]}.claim_signature", report))
+
+    def test_v2_untouched_claim_passes_offline(self):
+        self._write_v2_claim()
+        report = verifier.run_verification(self.td, skip_rpc=True)
+        self.assertEqual(report["result"], "PASS", [c for c in report["checks"] if c["status"] == "FAIL"])
+        self.assertEqual(status_of(f"claim:{TX1[:12]}.claim_signature", report)["status"], "PASS")
 
     def test_claim_signed_by_the_wrong_wallet_fails(self):
         self._write_claim(key=OTHER_KEY)

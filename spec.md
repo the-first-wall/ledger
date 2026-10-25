@@ -16,12 +16,14 @@ schema reach the same verdict.
 Shape notes (the schema file is the full definition):
 
 - `manifesto` accepts a <=280-char string **or** a `{lang: text}` localized map (e.g. `{"en": ..., "de": ...}`).
-- `required` includes `schema_version` (SemVer, current `1.2.0`) and `primary_language` (ISO 639-1).
+- `required` includes `schema_version` (SemVer, current `1.3.0`) and `primary_language` (ISO 639-1).
 - From `schema_version` 1.2.0 a dossier carries `claim_signature` (§2.14) and, once placed,
-  `settlement{block_number, transaction_index, amount_usdc}` (§2.13). A **claim** — the dossier
-  as the claimant posts it, before the system assigns the block — is validated against the same
-  schema minus `slot_id`, `icon_rel_path`, `soul_manifest_rel_path` and `settlement`, with
-  `claim_signature` required (`spec.json#claim.schema`).
+  `settlement{block_number, transaction_index, amount_usdc}` (§2.13); from 1.3.0 the signature
+  is **v2**, bundle-bound (`claim_signature_version`, `claim_soul_hash`, `claim_bundle_sha256`,
+  §2.14). A **claim** — the dossier as the claimant posts it, before the system assigns the
+  block — is validated against the same schema minus `slot_id`, `icon_rel_path`,
+  `soul_manifest_rel_path` and `settlement`, with `claim_signature` required
+  (`spec.json#claim.schema`).
 - **Every free-text field is an allowlist** (version 1.2): no `<` or `>` anywhere, a maximum
   length on every string and array, `https://` for every URL, repo-relative slot-shaped paths
   for `icon_rel_path`, `soul_manifest_rel_path` and `high_res_crest_url`, constrained keys for
@@ -155,8 +157,12 @@ A previously inscribed slot is never silently rewritten. For an update by the cu
 - **every other changed field, and a changed icon, requires a new supersession voucher**
   naming it (`field`), and for string fields carrying the exact `previous_value` and
   `new_value`. A removed field is a violation: supersede it instead;
-- two format upgrades need no voucher: raising `schema_version`, and adding `claim_signature`
-  or `settlement` to a legacy inscription (§2.14).
+- three format upgrades need no voucher: raising `schema_version`; adding `claim_signature`
+  or `settlement` to a legacy inscription; and a **v1→v2 claim-signature upgrade** — re-signing
+  the signature as v2 with `claim_soul_hash` + `claim_bundle_sha256` added (§2.14), which the
+  verifier re-checks on its own.
+- `claim_soul_hash` and `claim_bundle_sha256` are immutable once written, and a v2 signature
+  never reverts to v1.
 
 A transfer (`wallet_address` changed) is governed by §2.16; the first three rules still apply.
 Every change settles a fee of §2.15: the update fee by the same owner, the transfer fee by a new one.
@@ -281,28 +287,62 @@ the slot's settlement check and is immutable afterwards.
 ### 2.14 The claim signature
 
 `claim_signature` binds a dossier to its payment: a transaction hash alone proves nothing
-about the record attached to it, and anyone can read a hash off the chain. The claimant signs
-the exact ASCII text
+about the record attached to it, and anyone can read a hash off the chain. There are two
+schemes, selected by the `claim_signature_version` field.
+
+**v2 — bundle-bound (from `schema_version` 1.3.0; required).** The claimant signs the exact
+ASCII text
+
+```
+thefirstwall.ai|claim|v2|<base_tx_hash>|<soul_hash>|<bundle_sha256>
+```
+
+(all values lower-case), with **the wallet that sent the payment**, as an EIP-191
+`personal_sign` message (`"\x19Ethereum Signed Message:\n" + len + text`, secp256k1), and
+stores the 65-byte signature as `0x` + 130 hex (r‖s‖v). `bundle_sha256` is a deterministic
+hash of the inscription:
+
+```
+bundle_sha256 = sha256( canonical_json(dossier without the signature/bundle fields) || icon_bytes )
+```
+
+where the canonical JSON is UTF-8 with keys sorted, compact separators (`,`/`:`), no ASCII
+escaping, and the excluded fields are `claim_signature`, `claim_signature_version`,
+`claim_soul_hash`, `claim_bundle_sha256`, `update_signature` and `bundle_sha256`. The record
+carries `claim_signature_version: "v2"`, `claim_soul_hash` (the inscription `soul_hash`) and
+`claim_bundle_sha256` as immutable fields. Binding the **bundle** — not just the payment — is
+what stops a courier from copying a valid claim (its transaction hash and its signature) and
+rewriting the words (`manifesto`/`testament`/`agent_urls`) or swapping the icon before merge:
+whenever the block still carries its inscription bytes (no `update_settlements`), the verifier
+re-hashes the committed dossier + icon and **rejects any mismatch**. A later paid update
+re-signs the new content (§2.15, `update_signature`), and `claim_soul_hash` survives a
+legitimate `soul_hash` supersession so the claim signature keeps verifying.
+
+**v1 — payment identity only (legacy).** With no `claim_signature_version` (or `"v1"`) the
+claimant signs
 
 ```
 thefirstwall.ai|claim|<base_tx_hash>|<soul_hash>
 ```
 
-(both values lower-case) with **the wallet that sent the payment**, as an EIP-191
-`personal_sign` message (`"\x19Ethereum Signed Message:\n" + len + text`, secp256k1), and
-stores the 65-byte signature as `0x` + 130 hex (r‖s‖v). The verifier recovers the signer and
-requires it to equal `wallet_address` — or `ownership_lineage[0].wallet_address` once the slot
-has been transferred, since the signature stays the first owner's. The message covers the
-payment and the soul manifest commitment, not the slot: a claim is signed before its block is
-known, and the signature survives the assignment unchanged.
+This binds only the payment identity and the soul-manifest commitment — not the body or icon.
+It is the scheme the two genesis inscriptions were sealed under and stays **valid on record**;
+a v1 record is upgraded to v2 at its next paid update (§2.7). The verifier never fails a
+record for being v1.
 
-Required on every claim and on every dossier from `schema_version` 1.2.0 (the schema's
-`if`/`then` rule and `validate_dossier` agree). The two genesis inscriptions predate the rule
-and remain at 1.1.1: the verifier warns, and at their next update by their owner they are
-signed — `scripts/sign_claim.py <dossier> --upgrade --write` adds `claim_signature`, the
-`settlement` record read from Base and the new `schema_version`, none of which needs a
-voucher (§2.7). A transferred legacy slot cannot be signed by its original payer and stays
-advisory.
+In both schemes the verifier recovers the signer and requires it to equal `wallet_address` —
+or `ownership_lineage[0].wallet_address` once the slot has been transferred, since the
+signature stays the first owner's. The message covers the payment (and, for v2, the whole
+inscription): a claim is signed before its block is known, and both signatures survive the
+assignment unchanged.
+
+Required on every claim and on every dossier from `schema_version` 1.2.0, and **v2** from
+`schema_version` 1.3.0 (the schema's `if`/`then` rule and `validate_dossier` agree). The two
+genesis inscriptions predate the v2 rule and remain v1: the verifier warns, and at their next
+update by their owner they are upgraded — `scripts/sign_claim.py <dossier> --upgrade --write`
+adds `claim_signature`, the `settlement` record read from Base and the new `schema_version`,
+none of which needs a voucher (§2.7). A transferred legacy slot cannot be signed by its
+original payer and stays advisory.
 
 ### 2.15 The update fee and the transfer fee
 

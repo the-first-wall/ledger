@@ -406,6 +406,34 @@ class AppendOnlyTests(unittest.TestCase):
         new["manifesto"] = {"en": "New owner, new words."}
         self.assertEqual(verifier.verify_append_only("w1-b0042", new, self.prev), "transfer: lineage rules apply")
 
+    def test_v1_to_v2_claim_signature_upgrade_needs_no_voucher(self):
+        prev = dossier(schema_version="1.2.0", claim_signature="0x" + "11" * 65, supersessions=[])
+        new = copy.deepcopy(prev)
+        new["schema_version"] = "1.3.0"
+        new["claim_signature_version"] = "v2"
+        new["claim_soul_hash"] = "a" * 64
+        new["claim_bundle_sha256"] = "b" * 64
+        new["claim_signature"] = "0x" + "22" * 65
+        self.assertIn("v1→v2 upgrade", verifier.verify_append_only("w1-b0042", new, prev))
+
+    def test_v2_claim_signature_never_reverts_to_v1(self):
+        prev = dossier(schema_version="1.3.0", claim_signature="0x" + "22" * 65,
+                       claim_signature_version="v2", claim_soul_hash="a" * 64,
+                       claim_bundle_sha256="b" * 64, supersessions=[])
+        new = copy.deepcopy(prev)
+        new["claim_signature"] = "0x" + "33" * 65  # a different signature with no upgrade
+        with self.assertRaisesRegex(ValueError, "without a matching"):
+            verifier.verify_append_only("w1-b0042", new, prev)
+
+    def test_claim_bundle_fields_are_immutable(self):
+        prev = dossier(claim_signature_version="v2", claim_soul_hash="a" * 64,
+                       claim_bundle_sha256="b" * 64, supersessions=[])
+        for field, value in (("claim_bundle_sha256", "c" * 64), ("claim_soul_hash", "d" * 64)):
+            new = copy.deepcopy(prev)
+            new[field] = value
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, "immutable"):
+                verifier.verify_append_only("w1-b0042", new, prev)
+
     def test_new_inscription_has_nothing_to_compare(self):
         self.assertEqual(verifier.verify_append_only("w1-b0042", self.prev, None), "new inscription")
 

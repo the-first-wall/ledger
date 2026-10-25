@@ -631,7 +631,21 @@ LIVING_FIELDS = {
 APPEND_ONLY_FIELDS = {"supersessions", "ownership_lineage", "boundary_events", "update_settlements", "evidence"}
 # Fields that never change once inscribed, voucher or not.
 IMMUTABLE_FIELDS = {"slot_id", "base_tx_hash", "instantiation_date", "patron", "reserved_grant", "memorial",
-                    "settlement"}
+                    "settlement", "claim_soul_hash", "claim_bundle_sha256"}
+
+
+def _claim_signature_upgrade(old: Any, new: Any) -> bool:
+    """True only when the sole reason `claim_signature` changed is a v1→v2
+    signature-scheme upgrade: the scheme gains a bundle binding, the new record
+    carries it, and v2 never reverts to v1. The signature itself is re-verified
+    separately, so this is a format upgrade, not a rewrite."""
+    if not isinstance(old, dict) or not isinstance(new, dict):
+        return False
+    old_v = str(old.get("claim_signature_version") or "v1").lower()
+    new_v = str(new.get("claim_signature_version") or "v1").lower()
+    if old_v == "v2" or new_v != "v2":
+        return False
+    return bool(new.get("claim_bundle_sha256")) and old.get("claim_signature") != new.get("claim_signature")
 
 
 def _canon(value: Any) -> str:
@@ -747,6 +761,9 @@ def verify_append_only(slot_id: str, new_data: dict, prev_data: Optional[dict],
             if field == "schema_version" and \
                     claims.parse_version(new_data[field]) > claims.parse_version(prev_data[field]):
                 changed.append("schema_version (upgrade)")
+                continue
+            if field == "claim_signature" and _claim_signature_upgrade(prev_data, new_data):
+                changed.append("claim_signature (v1→v2 upgrade)")
                 continue
             if not covered(field, prev_data[field], new_data[field]):
                 raise ValueError(
@@ -959,6 +976,19 @@ def validate_dossier(dossier_data: dict, kind: str = "slot"):
             f"Missing required field: claim_signature (required from schema_version "
             f"{claims.CURRENT_SCHEMA_VERSION}; sign with scripts/sign_claim.py)"
         )
+    if claims.requires_bundle_signature(dossier_data):
+        if claims.claim_signature_version(dossier_data) != "v2":
+            raise ValueError(
+                "Missing or wrong claim_signature_version: a dossier at schema_version 1.3.0 or later "
+                "signs the bundle-bound v2 message (claim_signature_version must be 'v2'; sign with "
+                "scripts/sign_claim.py)."
+            )
+        for field in ("claim_soul_hash", "claim_bundle_sha256"):
+            if not claims.HEX32_RE.match(str(dossier_data.get(field, ""))):
+                raise ValueError(
+                    f"Missing or malformed {field}: a v2 claim signature names the inscription soul_hash "
+                    "and the bundle hash of the dossier + icon (64 lowercase hex)."
+                )
     if kind == "claim":
         present = [k for k in claims.ASSIGNED_FIELDS if k in dossier_data]
         if present:
@@ -2148,8 +2178,11 @@ def run_verification(base_dir: str, *, skip_rpc: bool = False, rpc_scope: str = 
         # genesis inscriptions predate the rule: advisory until their owner
         # next touches them (a transferred legacy slot cannot be signed by its
         # original payer and stays advisory).
+        icon_path = os.path.join(slot_dir, f"{slot_id}.webp")
+        new_icon = _read_bytes(icon_path)
         if claims.requires_signature(data) or "claim_signature" in data:
-            log.guard(slot_id + ".claim_signature", lambda d=data: claims.verify_claim_signature(d))
+            log.guard(slot_id + ".claim_signature",
+                      lambda d=data, ic=new_icon: claims.verify_claim_signature(d, ic))
         elif slot_id in touched and not data.get("ownership_lineage"):
             log.record(slot_id + ".claim_signature", "FAIL",
                        "legacy inscription (schema 1.1.x) is being updated: sign it first — "
@@ -2176,8 +2209,6 @@ def run_verification(base_dir: str, *, skip_rpc: bool = False, rpc_scope: str = 
             log.record(slot_id + ".soul_manifest_hygiene", severity, str(e))
 
         prev = previous_dossier(slot_id)
-        icon_path = os.path.join(slot_dir, f"{slot_id}.webp")
-        new_icon = _read_bytes(icon_path)
         prev_icon = previous_icon(slot_id) if prev is not None else None
         log.guard(slot_id + ".append_only",
                   lambda s=slot_id, d=data, p=prev, ni=new_icon, pi=prev_icon:
@@ -2288,7 +2319,9 @@ def run_verification(base_dir: str, *, skip_rpc: bool = False, rpc_scope: str = 
         log.guard(tag + ".identity", lambda f=c_file, d=data: verify_claim_identity(f, d, claims_dir))
         log.guard(tag + ".schema", lambda d=data: validate_dossier(d, kind="claim"),
                   f"claim schema {data.get('schema_version')}")
-        log.guard(tag + ".claim_signature", lambda d=data: claims.verify_claim_signature(d))
+        log.guard(tag + ".claim_signature",
+                  lambda d=data, ic=_read_bytes(os.path.join(claims_dir, f"{tx}.webp")):
+                  claims.verify_claim_signature(d, ic))
         log.guard(tag + ".reserved_grant", lambda d=data: verify_claim_grant(d))
         log.guard(tag + ".soul_manifest", lambda d=data, t=tx: verify_claim_manifest(d, claims_dir, t))
         try:

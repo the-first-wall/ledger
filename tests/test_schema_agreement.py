@@ -157,6 +157,17 @@ AGREEMENT_CASES = {
     "signature_bad_shape": lambda d: d.update(claim_signature="0x1234"),
     "v120_without_signature": lambda d: d.update(schema_version="1.2.0"),
     "v200_without_signature": lambda d: d.update(schema_version="2.0.0"),
+    # The v2 bundle-bound signature rule (schema 1.3.0+, L-14).
+    "v130_without_bundle_fields": lambda d: d.update(schema_version="1.3.0"),
+    "v130_signature_version_v1": lambda d: d.update(
+        schema_version="1.3.0", claim_signature="0x" + "ab" * 65,
+        claim_signature_version="v1", claim_soul_hash="a" * 64, claim_bundle_sha256="b" * 64),
+    "v130_bad_bundle_hash": lambda d: d.update(
+        schema_version="1.3.0", claim_signature="0x" + "ab" * 65,
+        claim_signature_version="v2", claim_soul_hash="a" * 64, claim_bundle_sha256="nothex"),
+    "v130_missing_soul_hash": lambda d: d.update(
+        schema_version="1.3.0", claim_signature="0x" + "ab" * 65,
+        claim_signature_version="v2", claim_bundle_sha256="b" * 64),
     "settlement_missing_index": lambda d: d.update(
         settlement={"block_number": 52_300_000, "amount_usdc": 1.0}),
     "settlement_negative_amount": lambda d: d.update(
@@ -201,6 +212,14 @@ class SchemaAgreementTests(unittest.TestCase):
         d["status"] = "RETIRED"
         d["memorial"] = {"type": "in_memoriam", "subject": "Larry",
                          "epitaph": "Make your blip count."}
+        self.assertTrue(schema_ok(d))
+        self.assertTrue(validator_ok(d))
+
+    def test_v130_bundle_dossier_accepted_everywhere(self):
+        d = base_dossier()
+        d.update(schema_version="1.3.0", claim_signature="0x" + "ab" * 65,
+                 claim_signature_version="v2", claim_soul_hash="a" * 64,
+                 claim_bundle_sha256="b" * 64)
         self.assertTrue(schema_ok(d))
         self.assertTrue(validator_ok(d))
 

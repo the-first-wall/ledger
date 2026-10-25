@@ -43,12 +43,29 @@ INVARIANTS = [
     },
     {
         "id": "claim-signature",
-        "summary": "claim_signature is an EIP-191 personal_sign by the paying wallet over "
-                   "'thefirstwall.ai|claim|<base_tx_hash>|<soul_hash>'. It binds the dossier to the "
-                   "payment: a transaction hash alone proves nothing about the record attached to "
-                   "it. Required on every claim and on every dossier from schema_version 1.2.0; the "
-                   "two genesis inscriptions (1.1.1) are signed at their next update.",
-        "enforced_by": "scripts/claims.py::verify_claim_signature",
+        "summary": "claim_signature is an EIP-191 personal_sign by the paying wallet. At "
+                   "schema_version 1.3.0+ it is v2 and signs "
+                   "'thefirstwall.ai|claim|v2|<base_tx_hash>|<soul_hash>|<bundle_sha256>', where "
+                   "bundle_sha256 = sha256(canonical_json(dossier minus signature fields) || exact "
+                   "committed icon bytes). Binding the bundle is what stops a courier from copying a "
+                   "valid claim and rewriting the words (manifesto/testament/agent_urls) or swapping "
+                   "the icon before merge: the verifier re-hashes the committed dossier + icon and "
+                   "rejects a mismatch while the block still carries its inscription bytes. v1 "
+                   "('thefirstwall.ai|claim|<base_tx_hash>|<soul_hash>', payment identity only) stays "
+                   "valid for the two genesis inscriptions (1.1.1/1.2.0) and any record sealed under "
+                   "it; a v1 record is upgraded to v2 at its next paid update. Required on every "
+                   "claim and on every dossier from schema_version 1.2.0.",
+        "enforced_by": "scripts/claims.py::verify_claim_signature + bundle_sha256",
+    },
+    {
+        "id": "claim-bundle-binding",
+        "summary": "A v2 claim / inscription records claim_signature_version 'v2', claim_soul_hash "
+                   "(the soul_hash at inscription) and claim_bundle_sha256 (the inscription bundle "
+                   "hash) as immutable fields. The verifier re-hashes the committed dossier + icon "
+                   "and requires it to equal claim_bundle_sha256 whenever the block still carries "
+                   "its inscription bytes (no update_settlements); a later paid update re-signs the "
+                   "new content (see update-signature).",
+        "enforced_by": "scripts/verifier.py::validate_dossier + scripts/claims.py::verify_claim_signature",
     },
     {
         "id": "system-assigned-block",
@@ -208,7 +225,10 @@ INVARIANTS = [
                    "sealed field (and a changed icon) needs a new supersession voucher naming it. "
                    "Living fields (agent_urls, status, retirement, covenants, high_res_crest_url, "
                    "timestamp_verified) may change freely; raising schema_version and adding "
-                   "claim_signature or settlement need no voucher.",
+                   "claim_signature or settlement need no voucher, and a v1→v2 claim-signature upgrade "
+                   "(claim_signature re-signed as v2, with claim_soul_hash + claim_bundle_sha256 added) "
+                   "needs none either — the signature is re-verified separately. claim_soul_hash and "
+                   "claim_bundle_sha256 are immutable once written.",
         "enforced_by": "scripts/verifier.py::verify_append_only + verify_ownership_lineage",
     },
     {
@@ -260,9 +280,14 @@ CLAIM_FLOW = [
                "icon_rel_path, soul_manifest_rel_path and settlement), a secret-free soul manifest "
                "without slot_id, and a 10x10 icon canonicalised with scripts/sanitize_icon.py."},
     {"step": 4, "action": "sign",
-     "detail": "Sign 'thefirstwall.ai|claim|<base_tx_hash>|<soul_hash>' with the paying wallet "
-               "(EIP-191 personal_sign; scripts/sign_claim.py, or any wallet library) and put the "
-               "65-byte signature in claim_signature."},
+     "detail": "Sign 'thefirstwall.ai|claim|v2|<base_tx_hash>|<soul_hash>|<bundle_sha256>' with the "
+               "paying wallet (EIP-191 personal_sign; scripts/sign_claim.py, or any wallet library), where "
+               "bundle_sha256 = sha256(canonical_json(dossier minus the signature fields) || the exact "
+               "committed icon bytes). Put the 65-byte signature in claim_signature and set "
+               "claim_signature_version 'v2', claim_soul_hash and claim_bundle_sha256. Binding the bundle "
+               "binds the words and the picture, not just the payment."}, {"step": 4.5, "action": "api_hint",
+     "detail": "The message text a generic wallet must sign is exactly the string above; scripts/sign_claim.py "
+               "--print-message gives it for a dossier."},
     {"step": 5, "action": "submit",
      "detail": "Open ONE pull request against main adding exactly ledger/claims/<base_tx_hash>.json, "
                ".webp and .soul.json (lower-case hash). Anyone may open it: identity is proven by the "
@@ -354,7 +379,7 @@ def build_spec() -> dict:
 
     return {
         "spec": "thefirstwall/attestation",
-        "spec_version": "1.9",
+        "spec_version": "1.10",
         "title": "The First Wall — Attestation Specification",
         "description": "Machine-readable specification and validation invariants for inscriptions "
                        "on The First Wall (Wall 01). Companion to spec.md.",
@@ -460,8 +485,16 @@ def build_spec() -> dict:
             "signature": {
                 "field": "claim_signature",
                 "scheme": "EIP-191 personal_sign (eth_sign prefix), secp256k1, 65 bytes r||s||v as 0x-hex",
-                "message": claims.CLAIM_MESSAGE_PREFIX + "<base_tx_hash>|<soul_hash>",
-                "message_case": "base_tx_hash and soul_hash lower-case",
+                "version_field": "claim_signature_version ('v1'|'v2'; absent = v1, the genesis scheme)",
+                "message_v2": claims.CLAIM_MESSAGE_PREFIX_V2 + "<base_tx_hash>|<soul_hash>|<bundle_sha256>",
+                "message_v1": claims.CLAIM_MESSAGE_PREFIX + "<base_tx_hash>|<soul_hash> (legacy: payment identity only)",
+                "message": claims.CLAIM_MESSAGE_PREFIX_V2 + "<base_tx_hash>|<soul_hash>|<bundle_sha256>",
+                "bundle_sha256": claims.BUNDLE_CANONICALIZATION,
+                "bundle_fields": ["claim_signature_version", "claim_soul_hash", "claim_bundle_sha256"],
+                "message_case": "base_tx_hash, soul_hash and bundle_sha256 lower-case",
+                "back_compat": "a dossier with no claim_signature_version (or 'v1') is verified under the "
+                               "v1 message and stays valid on record; only schema_version 1.3.0+ requires v2",
+                "tool": "scripts/sign_claim.py (v2 by default; --version v1 for legacy records)",
                 "signer": "wallet_address — the wallet that sent the USDC (ownership_lineage[0]"
                           ".wallet_address once a slot has been transferred)",
                 "tool": "scripts/sign_claim.py",
