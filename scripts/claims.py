@@ -170,6 +170,50 @@ def sign_claim(dossier: Dict[str, Any], private_key: str, icon_bytes: Optional[b
     return sig if sig.startswith("0x") else "0x" + sig
 
 
+# --- The update signature (L-15) ---------------------------------------------
+#
+# A content change is posted as an update request and settles a flat fee. The fee
+# transaction proves PAYMENT, not authorship: a courier who watches the chain can
+# copy an owner's request (its fee tx and its files) and rewrite the content while
+# the fee still checks out. So the owner also signs the change itself:
+#
+#     thefirstwall.ai|update|v2|<slot_id>|<fee_tx>|<bundle_sha256>
+#
+# where bundle_sha256 is the same canonical dossier+icon hash the claim signature
+# binds (see BUNDLE_CANONICALIZATION). The signature is recorded on the
+# update_settlements entry it pays for and re-verified there.
+
+UPDATE_MESSAGE_PREFIX = "thefirstwall.ai|update|v2|"
+
+
+def update_message(slot_id: Any, fee_tx: Any, bundle_sha256: Any) -> str:
+    """The exact ASCII text an owner signs to authorize a paid change."""
+    return (f"{UPDATE_MESSAGE_PREFIX}{str(slot_id).lower()}|{str(fee_tx).lower()}|"
+            f"{str(bundle_sha256).lower()}")
+
+
+def sign_update(slot_id: str, fee_tx: str, bundle_sha256: str, private_key: str) -> str:
+    """The owner's update signature (never logs the key)."""
+    from eth_account import Account
+    from eth_account.messages import encode_defunct
+    signed = Account.sign_message(encode_defunct(text=update_message(slot_id, fee_tx, bundle_sha256)),
+                                  private_key=private_key)
+    sig = signed.signature.hex()
+    return sig if sig.startswith("0x") else "0x" + sig
+
+
+def verify_update_signature(slot_id: str, fee_tx: str, bundle_sha256: str,
+                            signature: Any) -> str:
+    """The signer recovered from an update signature (the verifier compares it to
+    the entry's wallet_address)."""
+    if not signature:
+        raise ValueError(
+            "update_signature is missing: sign thefirstwall.ai|update|v2|<slot_id>|<fee_tx>|"
+            "<bundle_sha256> with the owner's wallet (scripts/sign_update.py)."
+        )
+    return recover_signer(update_message(slot_id, fee_tx, bundle_sha256), signature)
+
+
 def parse_version(value: Any) -> Tuple[int, int, int]:
     m = re.match(r"^(\d+)\.(\d+)\.(\d+)$", str(value or ""))
     return (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else (0, 0, 0)

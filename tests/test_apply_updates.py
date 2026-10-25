@@ -35,8 +35,8 @@ import verifier  # noqa: E402
 from PIL import Image  # noqa: E402
 
 # Shared fixtures (functions only, so no test case is collected twice).
-from test_updates import (BUYER, HEAD, SELLER, SELLER_KEY, TX_CLAIM, TX_FEE1, TX_FEE2, TX_SALE1,  # noqa: E402
-                          USDC, FakeRpc, fee, failing, inscribed, status_of, transferred)
+from test_updates import (BUYER, BUYER_KEY, HEAD, SELLER, SELLER_KEY, TX_CLAIM, TX_FEE1, TX_FEE2,  # noqa: E402
+                          TX_SALE1, USDC, FakeRpc, fee, failing, inscribed, status_of, transferred)
 
 SLOT = "w1-b0042"
 OTHER = "w1-b0043"
@@ -217,8 +217,10 @@ class RequestLedger(unittest.TestCase):
                     out[os.path.relpath(path, self.td)] = fh.read()
         return out
 
-    def post(self, new, tx=TX_FEE1, soul_note=None, icon=None):
-        """Write a request: the dossier, and the manifest / icon when they change."""
+    def post(self, new, tx=TX_FEE1, soul_note=None, icon=None, key=SELLER_KEY):
+        """Write a request: the dossier, and the manifest / icon when they change.
+        The newest fee entry is signed by the owner over the content (the fee proves
+        payment, not authorship), hashed with the icon that will be in effect."""
         os.makedirs(self.upd, exist_ok=True)
         new = dict(new)
         if soul_note is not None:
@@ -229,6 +231,14 @@ class RequestLedger(unittest.TestCase):
         if icon is not None:
             with open(os.path.join(self.upd, f"{tx}.webp"), "wb") as fh:
                 fh.write(icon)
+        fees = new.get("update_settlements")
+        if fees:
+            # The icon the slot will carry once applied: the request's, else the slot's.
+            effective = icon if icon is not None else self.icon_bytes()
+            entry = fees[-1]
+            entry["bundle_sha256"] = claims.bundle_sha256(new, effective)
+            entry["update_signature"] = claims.sign_update(new["slot_id"], entry["tx_hash"],
+                                                           entry["bundle_sha256"], key)
         with open(os.path.join(self.upd, f"{tx}.json"), "w", encoding="utf-8") as fh:
             fh.write(core.render(new))
         return new
@@ -340,7 +350,7 @@ class RequestVerificationTests(RequestLedger):
 
     def test_a_transfer_is_a_request_like_any_other(self):
         sold = transferred(self.prev)
-        self.post(sold, soul_note="the buyer's manifest")
+        self.post(sold, soul_note="the buyer's manifest", key=BUYER_KEY)
         rpc = (FakeRpc().settle(TX_CLAIM, SELLER, USDC, block=HEAD - 5000).settle(TX_FEE1, BUYER, 5 * USDC)
                .settle(TX_SALE1, BUYER, 5 * USDC, to=SELLER))
         report = self.pr(rpc=rpc)
@@ -401,7 +411,7 @@ class ApplyTests(RequestLedger):
 
     def test_a_carried_icon_and_manifest_replace_the_slots(self):
         icon = self.icon_bytes((200, 20, 10, 255))
-        posted = self.post(transferred(self.prev), soul_note="the buyer's manifest", icon=icon)
+        posted = self.post(transferred(self.prev), soul_note="the buyer's manifest", icon=icon, key=BUYER_KEY)
         rpc = (FakeRpc().settle(TX_CLAIM, SELLER, USDC, block=HEAD - 5000).settle(TX_FEE1, BUYER, 5 * USDC)
                .settle(TX_SALE1, BUYER, 5 * USDC, to=SELLER))
         self.assertEqual(self.run_apply(rpc=rpc), 0)

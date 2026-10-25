@@ -295,6 +295,33 @@ class BundleSignatureTests(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------- #
+# L-15 — the update signature (the fee proves payment, not authorship)
+# --------------------------------------------------------------------------- #
+
+class UpdateSignatureTests(unittest.TestCase):
+
+    def test_message_is_exact_and_lower_case(self):
+        self.assertEqual(claims.update_message("W1-B0042", "0xABC", "AB" * 32),
+                         "thefirstwall.ai|update|v2|w1-b0042|0xabc|" + "ab" * 32)
+
+    def test_sign_and_recover_roundtrip(self):
+        sig = claims.sign_update("w1-b0042", TX1, "b" * 64, TEST_KEY)
+        self.assertRegex(sig, r"^0x[0-9a-f]{130}$")
+        self.assertEqual(claims.verify_update_signature("w1-b0042", TX1, "b" * 64, sig), TEST_ADDR)
+
+    def test_every_field_is_bound(self):
+        sig = claims.sign_update("w1-b0042", TX1, "b" * 64, TEST_KEY)
+        for slot, tx, bundle in (("w1-b0043", TX1, "b" * 64), ("w1-b0042", TX2, "b" * 64),
+                                 ("w1-b0042", TX1, "c" * 64)):
+            with self.subTest(slot=slot, tx=tx, bundle=bundle[:4]):
+                self.assertNotEqual(claims.verify_update_signature(slot, tx, bundle, sig), TEST_ADDR)
+
+    def test_missing_signature_is_named(self):
+        with self.assertRaisesRegex(ValueError, "update_signature is missing"):
+            claims.verify_update_signature("w1-b0042", TX1, "b" * 64, None)
+
+
+# --------------------------------------------------------------------------- #
 # The claim schema (dossier minus the assigned fields, signature required)
 # --------------------------------------------------------------------------- #
 

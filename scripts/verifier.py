@@ -1705,7 +1705,52 @@ def verify_update_settlements(slot_id: str, new_data: dict, prev_data: Optional[
             f"Update Fee Violation: this change is a {expected_kind!r}; update_settlements[{len(fees) - 1}].kind "
             f"says {entry.get('kind')!r}."
         )
+    for key in ("bundle_sha256", "update_signature"):
+        if not entry.get(key):
+            raise ValueError(
+                f"Update Signature Violation: update_settlements[{len(fees) - 1}] is missing {key}: a paid "
+                "change is authorized by the owner's signature over the new content. Sign the change with "
+                "scripts/sign_update.py and record it on the entry (the fee transaction proves payment, "
+                "not authorship)."
+            )
     return f"{expected_kind} fee {float(entry.get('amount_usdc', 0)):.2f} USDC (owed {price:.2f} USDC)"
+
+
+def verify_update_signatures(slot_id: str, data: dict, icon_bytes: Optional[bytes] = None) -> str:
+    """Every signed update_settlements entry proves the owner authorized the change
+    (L-15): the entry's update_signature is an EIP-191 personal_sign by the entry's
+    wallet_address over 'thefirstwall.ai|update|v2|<slot_id>|<tx_hash>|<bundle_sha256>',
+    and — while the exact committed bytes are available — the newest signed entry's
+    bundle_sha256 must equal the bundle hash of the committed dossier + icon, so a
+    block rewritten after the signature is rejected. Legacy entries (no signature)
+    stay valid and are simply not re-proven."""
+    fees = data.get("update_settlements") or []
+    signed = [(i, e) for i, e in enumerate(fees)
+              if isinstance(e, dict) and ("update_signature" in e or "bundle_sha256" in e)]
+    for i, entry in signed:
+        if not entry.get("bundle_sha256") or not entry.get("update_signature"):
+            raise ValueError(
+                f"Update Signature Violation: update_settlements[{i}] must carry both bundle_sha256 and "
+                "update_signature (scripts/sign_update.py)."
+            )
+        signer = claims.verify_update_signature(slot_id, entry.get("tx_hash"), entry.get("bundle_sha256"),
+                                                entry.get("update_signature"))
+        if signer.lower() != str(entry.get("wallet_address", "")).lower():
+            raise ValueError(
+                f"Update Signature Violation: update_settlements[{i}].update_signature was made by {signer}, "
+                f"not by the fee payer {entry.get('wallet_address')}. The fee proves payment, not authorship."
+            )
+    if signed and icon_bytes is not None:
+        last = signed[-1][1]
+        actual = claims.bundle_sha256(data, icon_bytes)
+        recorded = str(last.get("bundle_sha256", "")).lower()
+        if actual != recorded:
+            raise ValueError(
+                "Update Signature Violation: the committed dossier + icon hash to "
+                f"{actual[:16]}…, not the newest signed bundle_sha256 {recorded[:16]}…. The block was "
+                "rewritten after the owner signed it."
+            )
+    return f"{len(signed)} signed update(s)" if signed else "no signed updates"
 
 
 def verify_update_fee_on_chain(slot_id: str, entry: dict, *, rpc: RpcFn = rpc_call,
@@ -2218,6 +2263,8 @@ def run_verification(base_dir: str, *, skip_rpc: bool = False, rpc_scope: str = 
         log.guard(slot_id + ".ownership_chain", lambda d=data: claims.verify_lineage_chain(d))
         log.guard(slot_id + ".update_settlements",
                   lambda s=slot_id, d=data, p=prev: verify_update_settlements(s, d, p, s in touched))
+        log.guard(slot_id + ".update_signature",
+                  lambda s=slot_id, d=data, ic=new_icon: verify_update_signatures(s, d, ic))
 
         log.guard(slot_id + ".icon_structure",
                   lambda p=icon_path: verify_icon(p))

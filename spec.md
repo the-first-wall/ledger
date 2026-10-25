@@ -57,7 +57,13 @@ corrected, the dossier appends a voucher to `supersessions[]`:
 }
 ```
 
-The prior value stays on the record forever; the correction is a linked, dated, signed delta.
+The prior value stays on the record forever; the correction is a linked, dated delta.
+
+`authorizing_signature` is **free text** (e.g. `operator:manzke (0x…)`) kept for the historical
+vouchers on record. It is **not** a cryptographic signature and the verifier never recovers or
+checks it — do not treat it as proof of who authorized the change. The cryptographic proof of
+authorization for a paid content change is the owner's `update_signature` on its
+`update_settlements[]` entry (§2.15); a sealed-field correction carries the same paid update.
 
 ### 2.3 Retirement & Epitaph (failure-legible endings)
 
@@ -367,7 +373,9 @@ entry to `update_settlements[]`:
   "wallet_address": "0x…",
   "amount_usdc": 0.5,
   "kind": "update",
-  "at": "2026-10-12T09:00:00Z"
+  "at": "2026-10-12T09:00:00Z",
+  "bundle_sha256": "<bundle hash of the block's new content>",
+  "update_signature": "0x…"
 }
 ```
 
@@ -379,6 +387,24 @@ its own (never `base_tx_hash`, `patron.tx_hash`, a sale hash or another fee) and
 one slot (§2.9); on the pull request it is proven on Base with the recorded amount, and the
 full history is re-proven on the weekly run. A new inscription carries no `update_settlements`.
 `scripts/record_update.py` reads a fee from Base and appends the entry.
+
+**The fee proves payment, not authorship.** Anyone watching the chain can copy an owner's request
+— its fee transaction and its files — and rewrite the content while the fee still checks out. So
+every entry appended by a paid change also carries the owner's **`update_signature`**, an EIP-191
+`personal_sign` over
+
+```
+thefirstwall.ai|update|v2|<slot_id>|<fee_tx>|<bundle_sha256>
+```
+
+(all values lower-case), where `fee_tx` is the entry's own `tx_hash` and `bundle_sha256` is the
+same canonical dossier + icon bundle hash the claim signature binds (§2.14). The verifier
+recovers the signer and requires it to equal the entry's `wallet_address`, and — while the exact
+committed bytes are available — requires the **newest signed entry's** `bundle_sha256` to equal
+the bundle hash of the committed dossier + icon, so a block rewritten after the signature is
+rejected. `bundle_sha256` and `update_signature` come in a pair (the schema's `if`/`then`);
+`scripts/sign_update.py` computes the bundle and signs. Entries first sealed before this rule
+carry no signature and stay valid; every entry appended from now on must.
 
 ### 2.16 Transfers: the sale is outside, the release and the payment are on the record
 

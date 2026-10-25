@@ -589,8 +589,43 @@
               "at": {
                 "type": "string",
                 "format": "date-time"
+              },
+              "bundle_sha256": {
+                "$ref": "#/$defs/hex32",
+                "description": "Bundle hash of the block's content after this change (canonical JSON of the dossier with signature/bundle fields stripped, concatenated with the exact committed icon bytes). Optional on legacy entries; required on every entry appended under this rule."
+              },
+              "update_signature": {
+                "type": "string",
+                "pattern": "^0x[0-9a-fA-F]{130}$",
+                "description": "EIP-191 personal_sign by the owner over 'thefirstwall.ai|update|v2|<slot_id>|<tx_hash>|<bundle_sha256>'. The fee transaction proves payment, not authorship; this signature is what proves the owner wrote the change."
               }
             },
+            "allOf": [
+              {
+                "if": {
+                  "required": [
+                    "update_signature"
+                  ]
+                },
+                "then": {
+                  "required": [
+                    "bundle_sha256"
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "required": [
+                    "bundle_sha256"
+                  ]
+                },
+                "then": {
+                  "required": [
+                    "update_signature"
+                  ]
+                }
+              }
+            ],
             "additionalProperties": false
           }
         },
@@ -651,7 +686,8 @@
               },
               "authorizing_signature": {
                 "$ref": "#/$defs/text",
-                "maxLength": 128
+                "maxLength": 128,
+                "description": "A free-text authorizing note (e.g. 'operator:manzke (0x\u2026)'), kept for the historical vouchers on record. It is NOT a cryptographic signature and the verifier never recovers or checks it \u2014 do not treat it as proof of who authorized the change. A paid content change is authorized by the owner's update_signature on its update_settlements[] entry."
               }
             },
             "additionalProperties": false
@@ -1420,7 +1456,8 @@
               },
               "authorizing_signature": {
                 "$ref": "#/$defs/text",
-                "maxLength": 128
+                "maxLength": 128,
+                "description": "A free-text authorizing note (e.g. 'operator:manzke (0x\u2026)'), kept for the historical vouchers on record. It is NOT a cryptographic signature and the verifier never recovers or checks it \u2014 do not treat it as proof of who authorized the change. A paid content change is authorized by the owner's update_signature on its update_settlements[] entry."
               }
             },
             "additionalProperties": false
@@ -1768,8 +1805,13 @@
     },
     {
       "id": "update-fee",
-      "summary": "Every change of an inscribed block by its owner settles one USDC transfer from the owner's wallet after the change to pay_to and appends exactly one entry {tx_hash, wallet_address, amount_usdc, kind, at} to update_settlements[]. A content update owes the flat update fee (update_price_usdc: 0.50 USDC, the same for every block whatever its number or the wall's tier; it finances the wall: every change is re-anchored on Base, re-verified and re-published, and it is kept low so the wall stays up to date). A change of owner owes the flat transfer fee instead (transfer_price_usdc: 5.00 USDC, paid by the buyer; a transfer takes more checking: the offer, the payment to the seller, the lineage, every release on record). One change, one fee; the fee transaction is its own (never a hash cited elsewhere), proven on Base, and the array only grows.",
+      "summary": "Every change of an inscribed block by its owner settles one USDC transfer from the owner's wallet after the change to pay_to and appends exactly one entry {tx_hash, wallet_address, amount_usdc, kind, at} to update_settlements[]. A content update owes the flat update fee (update_price_usdc: 0.50 USDC, the same for every block whatever its number or the wall's tier; it finances the wall: every change is re-anchored on Base, re-verified and re-published, and it is kept low so the wall stays up to date). A change of owner owes the flat transfer fee instead (transfer_price_usdc: 5.00 USDC, paid by the buyer; a transfer takes more checking: the offer, the payment to the seller, the lineage, every release on record). One change, one fee; the fee transaction is its own (never a hash cited elsewhere), proven on Base, and the array only grows. Each appended entry also carries the owner's update_signature over the new content (see update-signature): the fee proves payment, not authorship.",
       "enforced_by": "scripts/verifier.py::verify_update_settlements + verify_update_fee_on_chain"
+    },
+    {
+      "id": "update-signature",
+      "summary": "Every update_settlements entry appended by a paid change also carries bundle_sha256 (the bundle hash of the block's new content: canonical dossier + exact committed icon) and update_signature, an EIP-191 personal_sign by the owner over 'thefirstwall.ai|update|v2|<slot_id>|<fee_tx>|<bundle_sha256>'. The fee transaction proves payment, not authorship: a courier who copies an owner's request (its fee tx and files) and rewrites the content still pays a real fee. The signature is what proves the owner wrote the change; the verifier recovers it to the entry's wallet_address and requires the newest signed entry to match the committed dossier + icon, so a rewritten block is rejected. Legacy entries without a signature stay valid.",
+      "enforced_by": "scripts/verifier.py::verify_update_signatures + scripts/claims.py::verify_update_signature"
     },
     {
       "id": "transfer-release",
@@ -1882,7 +1924,8 @@
       "reason",
       "superseded_at",
       "authorizing_signature"
-    ]
+    ],
+    "authorizing_signature": "free text (e.g. 'operator:manzke (0x\u2026)'); NOT a cryptographic signature and never recovered or checked by the verifier \u2014 do not treat it as proof of who authorized the change. A paid content change is authorized by update_signature on its update_settlements entry."
   },
   "claim_flow": [
     {
@@ -1938,6 +1981,11 @@
       "detail": "Append exactly one entry {tx_hash, wallet_address, amount_usdc, kind: 'update', at} to update_settlements[] (scripts/record_update.py <dossier> <tx> --write reads it from Base). Change what you came to change: living fields freely, sealed fields with a supersession voucher (spec.md 2.1), the icon with a voucher for 'icon'."
     },
     {
+      "step": 3.5,
+      "action": "sign",
+      "detail": "Sign the change itself: the fee proves payment, not authorship. scripts/sign_update.py <dossier> --key-file key.txt --write computes bundle_sha256 (canonical dossier + committed icon) and records bundle_sha256 + update_signature on the newest update_settlements entry, signing 'thefirstwall.ai|update|v2|<slot_id>|<fee_tx>|<bundle_sha256>' with the owner's wallet (EIP-191 personal_sign)."
+    },
+    {
       "step": 4,
       "action": "submit",
       "detail": "Run python scripts/post_update.py <slot_id>: it writes your edit as ledger/updates/<fee_tx_hash>.json (the slot's complete new dossier, named by the fee transaction; plus .webp and .soul.json if the icon or manifest changed) and puts the slot's own files back as main has them. Open ONE pull request containing the request and nothing else: you never commit a slot and never touch the generated state. One update, one fee: a request without a new update_settlements entry, or with two, fails. The verifier checks it as the block it would become."
@@ -1967,7 +2015,7 @@
     {
       "step": 3,
       "action": "transfer_fee",
-      "detail": "The buyer pays the ledger the flat transfer_price_usdc (5.00 USDC, instead of the update fee; a transfer takes more checking) from the BUYER's wallet to pay_to and records it as an update_settlements entry of kind 'transfer' (scripts/record_update.py --kind transfer). That is all the ledger is paid for a sale."
+      "detail": "The buyer pays the ledger the flat transfer_price_usdc (5.00 USDC, instead of the update fee; a transfer takes more checking) from the BUYER's wallet to pay_to and records it as an update_settlements entry of kind 'transfer' (scripts/record_update.py --kind transfer). That is all the ledger is paid for a sale. The buyer also signs the change (scripts/sign_update.py, the firstwall.ai|update|v2 message) so the entry carries bundle_sha256 + update_signature: the fee proves payment, the signature proves who wrote it."
     },
     {
       "step": 4,
@@ -1977,7 +2025,8 @@
   ],
   "update_fee": {
     "field": "update_settlements[]",
-    "entry": "{tx_hash, wallet_address, amount_usdc, kind: 'update', at}",
+    "entry": "{tx_hash, wallet_address, amount_usdc, kind: 'update', at, bundle_sha256, update_signature}",
+    "signature": "bundle_sha256 + update_signature over thefirstwall.ai|update|v2|<slot_id>|<fee_tx>|<bundle_sha256> by the owner's wallet; the fee proves payment, the signature proves authorship; scripts/sign_update.py",
     "payer": "the block's wallet_address",
     "amount_usdc": 0.5,
     "amount": "at least update_price_usdc, flat, the same for every block whatever its number or the wall's tier; overpayment accepted; no refunds",
@@ -1986,7 +2035,7 @@
   },
   "transfer_fee": {
     "field": "update_settlements[]",
-    "entry": "{tx_hash, wallet_address, amount_usdc, kind: 'transfer', at}",
+    "entry": "{tx_hash, wallet_address, amount_usdc, kind: 'transfer', at, bundle_sha256, update_signature}",
     "payer": "the buyer (the block's wallet_address after the change)",
     "amount_usdc": 5.0,
     "amount": "at least transfer_price_usdc, flat, instead of the update fee; overpayment accepted; no refunds",

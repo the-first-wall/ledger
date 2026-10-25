@@ -296,8 +296,21 @@
           "wallet_address": { "$ref": "#/$defs/address" },
           "amount_usdc": { "type": "number", "minimum": 0 },
           "kind": { "type": "string", "enum": ["update", "transfer"] },
-          "at": { "type": "string", "format": "date-time" }
+          "at": { "type": "string", "format": "date-time" },
+          "bundle_sha256": {
+            "$ref": "#/$defs/hex32",
+            "description": "Bundle hash of the block's content after this change (canonical JSON of the dossier with signature/bundle fields stripped, concatenated with the exact committed icon bytes). Optional on legacy entries; required on every entry appended under this rule."
+          },
+          "update_signature": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{130}$",
+            "description": "EIP-191 personal_sign by the owner over 'thefirstwall.ai|update|v2|<slot_id>|<tx_hash>|<bundle_sha256>'. The fee transaction proves payment, not authorship; this signature is what proves the owner wrote the change."
+          }
         },
+        "allOf": [
+          { "if": { "required": ["update_signature"] }, "then": { "required": ["bundle_sha256"] } },
+          { "if": { "required": ["bundle_sha256"] }, "then": { "required": ["update_signature"] } }
+        ],
         "additionalProperties": false
       }
     },
@@ -334,7 +347,11 @@
           "new_value": { "$ref": "#/$defs/text", "maxLength": 2000 },
           "reason": { "$ref": "#/$defs/text", "maxLength": 1000 },
           "superseded_at": { "type": "string", "format": "date-time" },
-          "authorizing_signature": { "$ref": "#/$defs/text", "maxLength": 128 }
+          "authorizing_signature": {
+            "$ref": "#/$defs/text",
+            "maxLength": 128,
+            "description": "A free-text authorizing note (e.g. 'operator:manzke (0x…)'), kept for the historical vouchers on record. It is NOT a cryptographic signature and the verifier never recovers or checks it — do not treat it as proof of who authorized the change. A paid content change is authorized by the owner's update_signature on its update_settlements[] entry."
+          }
         },
         "additionalProperties": false
       }

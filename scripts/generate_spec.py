@@ -96,8 +96,23 @@ INVARIANTS = [
                    "of owner owes the flat transfer fee instead (transfer_price_usdc: 5.00 USDC, paid by the "
                    "buyer; a transfer takes more checking: the offer, the payment to the seller, the lineage, "
                    "every release on record). One change, one fee; the fee transaction is its own (never a "
-                   "hash cited elsewhere), proven on Base, and the array only grows.",
+                   "hash cited elsewhere), proven on Base, and the array only grows. Each appended entry also "
+                   "carries the owner's update_signature over the new content (see update-signature): the fee "
+                   "proves payment, not authorship.",
         "enforced_by": "scripts/verifier.py::verify_update_settlements + verify_update_fee_on_chain",
+    },
+    {
+        "id": "update-signature",
+        "summary": "Every update_settlements entry appended by a paid change also carries bundle_sha256 "
+                   "(the bundle hash of the block's new content: canonical dossier + exact committed icon) "
+                   "and update_signature, an EIP-191 personal_sign by the owner over "
+                   "'thefirstwall.ai|update|v2|<slot_id>|<fee_tx>|<bundle_sha256>'. The fee transaction "
+                   "proves payment, not authorship: a courier who copies an owner's request (its fee tx "
+                   "and files) and rewrites the content still pays a real fee. The signature is what proves "
+                   "the owner wrote the change; the verifier recovers it to the entry's wallet_address and "
+                   "requires the newest signed entry to match the committed dossier + icon, so a rewritten "
+                   "block is rejected. Legacy entries without a signature stay valid.",
+        "enforced_by": "scripts/verifier.py::verify_update_signatures + scripts/claims.py::verify_update_signature",
     },
     {
         "id": "transfer-release",
@@ -314,6 +329,12 @@ UPDATE_FLOW = [
                "update_settlements[] (scripts/record_update.py <dossier> <tx> --write reads it from Base). "
                "Change what you came to change: living fields freely, sealed fields with a supersession "
                "voucher (spec.md 2.1), the icon with a voucher for 'icon'."},
+    {"step": 3.5, "action": "sign",
+     "detail": "Sign the change itself: the fee proves payment, not authorship. scripts/sign_update.py "
+               "<dossier> --key-file key.txt --write computes bundle_sha256 (canonical dossier + committed "
+               "icon) and records bundle_sha256 + update_signature on the newest update_settlements entry, "
+               "signing 'thefirstwall.ai|update|v2|<slot_id>|<fee_tx>|<bundle_sha256>' with the owner's "
+               "wallet (EIP-191 personal_sign)."},
     {"step": 4, "action": "submit",
      "detail": "Run python scripts/post_update.py <slot_id>: it writes your edit as ledger/updates/"
                "<fee_tx_hash>.json (the slot's complete new dossier, named by the fee transaction; plus "
@@ -357,7 +378,9 @@ TRANSFER_FLOW = [
      "detail": "The buyer pays the ledger the flat transfer_price_usdc (5.00 USDC, instead of the update fee; "
                "a transfer takes more checking) from the BUYER's wallet to pay_to and records it as an "
                "update_settlements entry of kind 'transfer' (scripts/record_update.py --kind transfer). That "
-               "is all the ledger is paid for a sale."},
+               "is all the ledger is paid for a sale. The buyer also signs the change "
+               "(scripts/sign_update.py, the firstwall.ai|update|v2 message) so the entry carries "
+               "bundle_sha256 + update_signature: the fee proves payment, the signature proves who wrote it."},
     {"step": 4, "action": "submit",
      "detail": "The buyer posts ONE update request (scripts/post_update.py <slot_id>; the bot applies it "
                "after the merge): wallet_address becomes the buyer's; ownership_lineage gains "
@@ -525,13 +548,22 @@ def build_spec() -> dict:
             "append_only": True,
             "fields": ["field", "previous_value", "new_value", "reason", "superseded_at",
                        "authorizing_signature"],
+            "authorizing_signature": "free text (e.g. 'operator:manzke (0x…)'); NOT a cryptographic "
+                                      "signature and never recovered or checked by the verifier — do not "
+                                      "treat it as proof of who authorized the change. A paid content "
+                                      "change is authorized by update_signature on its update_settlements "
+                                      "entry.",
         },
         "claim_flow": CLAIM_FLOW,
         "update_flow": UPDATE_FLOW,
         "transfer_flow": TRANSFER_FLOW,
         "update_fee": {
             "field": "update_settlements[]",
-            "entry": "{tx_hash, wallet_address, amount_usdc, kind: 'update', at}",
+            "entry": "{tx_hash, wallet_address, amount_usdc, kind: 'update', at, bundle_sha256, "
+                     "update_signature}",
+            "signature": "bundle_sha256 + update_signature over thefirstwall.ai|update|v2|<slot_id>|"
+                         "<fee_tx>|<bundle_sha256> by the owner's wallet; the fee proves payment, the "
+                         "signature proves authorship; scripts/sign_update.py",
             "payer": "the block's wallet_address",
             "amount_usdc": core.UPDATE_PRICE_USDC,
             "amount": "at least update_price_usdc, flat, the same for every block whatever its number or "
@@ -541,7 +573,8 @@ def build_spec() -> dict:
         },
         "transfer_fee": {
             "field": "update_settlements[]",
-            "entry": "{tx_hash, wallet_address, amount_usdc, kind: 'transfer', at}",
+            "entry": "{tx_hash, wallet_address, amount_usdc, kind: 'transfer', at, bundle_sha256, "
+                     "update_signature}",
             "payer": "the buyer (the block's wallet_address after the change)",
             "amount_usdc": core.TRANSFER_PRICE_USDC,
             "amount": "at least transfer_price_usdc, flat, instead of the update fee; overpayment accepted; "
