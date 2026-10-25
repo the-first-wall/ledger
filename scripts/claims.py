@@ -11,9 +11,15 @@ settlement transaction hash:
     ledger/claims/<tx_hash>.soul.json   the secret-free soul manifest
 
 The claim dossier carries `claim_signature`: an EIP-191 `personal_sign` by the
-paying wallet over `thefirstwall.ai|claim|<base_tx_hash>|<soul_hash>`. That is
-what binds the record to the payment; a transaction hash alone proves nothing
-about the dossier attached to it.
+paying wallet. From schema 1.3.0 it signs
+`thefirstwall.ai|claim|v2|<base_tx_hash>|<soul_hash>|<bundle_sha256>` where
+`bundle_sha256` is a deterministic hash of the dossier body plus the exact
+committed icon (see `BUNDLE_CANONICALIZATION`). Binding the bundle is what stops
+a courier from copying a valid claim — its transaction hash and signature — and
+rewriting the words (manifesto/testament/agent_urls) or swapping the icon before
+merge: the verifier re-hashes the posted bytes and rejects a mismatch. v1 (the
+schema the two genesis inscriptions were sealed under) signs only
+`thefirstwall.ai|claim|<base_tx_hash>|<soul_hash>` and stays valid on record.
 
 Once a claim is merged, `scripts/assign_slots.py` places every pending claim in
 SETTLEMENT ORDER — (block number, transaction index) of the USDC transfer — into
@@ -27,6 +33,8 @@ rule says.
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import os
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -42,22 +50,94 @@ CLAIM_SOUL_RE = re.compile(r"^ledger/claims/(0x[0-9a-f]{64})\.soul\.json$")
 # Dossiers at or above this schema version carry a claim signature. The two
 # genesis inscriptions predate the rule; they are signed at their next update.
 SIGNED_SCHEMA_VERSION = (1, 2, 0)
-CURRENT_SCHEMA_VERSION = "1.2.0"
+# Dossiers at or above this version carry a *bundle-bound* claim signature (v2):
+# the signature commits to a deterministic hash of the dossier body plus the
+# exact committed icon, so a courier who copies a valid payment cannot rewrite
+# the words or swap the picture. v1 signs only the payment identity
+# (base_tx_hash + soul_hash) and stays valid for the inscriptions sealed under it.
+BUNDLE_SIGNED_SCHEMA_VERSION = (1, 3, 0)
+CURRENT_SCHEMA_VERSION = "1.3.0"
 CLAIM_MESSAGE_PREFIX = "thefirstwall.ai|claim|"
+CLAIM_MESSAGE_PREFIX_V2 = "thefirstwall.ai|claim|v2|"
 TRANSFER_MESSAGE_PREFIX = "thefirstwall.ai|transfer|"
 SIGNATURE_RE = re.compile(r"^0x[0-9a-fA-F]{130}$")
+HEX32_RE = re.compile(r"^[a-f0-9]{64}$")
+
+# Signature/hash fields are removed (at every depth) before the bundle is hashed,
+# so the bundle is stable across a re-computed signature (a signature can never be
+# hashed inside the thing it signs).
+BUNDLE_STRIP_KEYS = frozenset({
+    "claim_signature", "claim_signature_version", "claim_soul_hash", "claim_bundle_sha256",
+    "update_signature", "bundle_sha256",
+})
+# What the assignment adds to a claim to make it a slot dossier. These are
+# derived from the settlement by the deterministic assignment rule — never chosen
+# by the claimant — so they are also removed (top level only) before hashing:
+# the bundle a claimant signs over their claim file is the same bundle the
+# verifier re-derives from the materialised slot dossier.
+ASSIGNED_FIELDS = ("slot_id", "icon_rel_path", "soul_manifest_rel_path", "settlement")
+BUNDLE_CANONICALIZATION = (
+    "SHA-256 of the UTF-8 bytes of the canonical JSON of the dossier with the "
+    "signature/bundle fields stripped at every depth (claim_signature, "
+    "claim_signature_version, claim_soul_hash, claim_bundle_sha256, update_signature, "
+    "bundle_sha256) and the top-level assignment fields stripped (slot_id, "
+    "icon_rel_path, soul_manifest_rel_path, settlement), keys sorted, compact "
+    "separators, no ASCII escaping, concatenated with the exact committed icon "
+    "bytes: sha256(canonical_json(dossier_stripped) || icon_bytes). The same rule "
+    "hashes a claim file and the slot it is materialised into, so they agree."
+)
 # Fields a posted claim never carries: it is a new inscription with no history.
 CLAIM_FORBIDDEN_FIELDS = ("ownership_lineage", "update_settlements")
-
-# What the assignment adds to a claim to make it a slot dossier.
-ASSIGNED_FIELDS = ("slot_id", "icon_rel_path", "soul_manifest_rel_path", "settlement")
 
 
 # --- The signature -----------------------------------------------------------
 
 def claim_message(base_tx_hash: Any, soul_hash: Any) -> str:
-    """The exact ASCII text the claimant signs (EIP-191 personal_sign)."""
+    """The v1 claim message (EIP-191 personal_sign): the exact ASCII text the
+    claimant signs. v1 binds only the payment identity."""
     return f"{CLAIM_MESSAGE_PREFIX}{str(base_tx_hash).lower()}|{str(soul_hash).lower()}"
+
+
+def claim_message_v2(base_tx_hash: Any, claim_soul_hash: Any, bundle_sha256: Any) -> str:
+    """The v2 claim message: the payment identity PLUS the bundle hash of the
+    dossier body + icon. Binding the bundle is what stops a courier from copying
+    a valid claim and rewriting the record before it is merged."""
+    return (f"{CLAIM_MESSAGE_PREFIX_V2}{str(base_tx_hash).lower()}|"
+            f"{str(claim_soul_hash).lower()}|{str(bundle_sha256).lower()}")
+
+
+def _strip_bundle_keys(obj: Any) -> Any:
+    """Recursively drop the signature/bundle fields, so the bundle is independent
+    of the signatures computed over it (and of their version)."""
+    if isinstance(obj, dict):
+        return {k: _strip_bundle_keys(v) for k, v in obj.items() if k not in BUNDLE_STRIP_KEYS}
+    if isinstance(obj, list):
+        return [_strip_bundle_keys(v) for v in obj]
+    return obj
+
+
+def bundle_sha256(dossier: Dict[str, Any], icon_bytes: Optional[bytes]) -> str:
+    """The deterministic bundle hash a v2 signature commits to. See
+    BUNDLE_CANONICALIZATION for the exact rule. Never hashes the signature fields
+    themselves nor the assignment fields, so signing, re-signing and the
+    claim→slot materialisation all agree."""
+    body = {k: v for k, v in dossier.items() if k not in ASSIGNED_FIELDS}
+    canonical = json.dumps(_strip_bundle_keys(body), sort_keys=True,
+                           separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    h = hashlib.sha256()
+    h.update(canonical)
+    h.update(icon_bytes or b"")
+    return h.hexdigest()
+
+
+def claim_signature_version(dossier: Dict[str, Any]) -> str:
+    """'v1' or 'v2'. Absent means v1 (the schema the two genesis inscriptions
+    were sealed under)."""
+    return str(dossier.get("claim_signature_version") or "v1").lower()
+
+
+def requires_bundle_signature(dossier: Dict[str, Any]) -> bool:
+    return parse_version(dossier.get("schema_version")) >= BUNDLE_SIGNED_SCHEMA_VERSION
 
 
 def recover_signer(message: str, signature: Any) -> str:
@@ -72,14 +152,75 @@ def recover_signer(message: str, signature: Any) -> str:
         raise ValueError(f"claim_signature does not recover to any address: {e}")
 
 
-def sign_claim(dossier: Dict[str, Any], private_key: str) -> str:
-    """Produce `claim_signature` for a claim dossier (never logs the key)."""
+def sign_claim(dossier: Dict[str, Any], private_key: str, icon_bytes: Optional[bytes] = None,
+               *, version: str = "v1") -> str:
+    """Produce `claim_signature` for a dossier (never logs the key).
+
+    `version="v2"` signs the bundle-bound message and fills claim_soul_hash +
+    claim_bundle_sha256 in-place; pass the exact committed icon bytes.
+    `version="v1"` (the default here, for back-compat with existing callers)
+    reproduces the legacy message (payment identity only) and needs no icon; the
+    `sign_claim.py` tool defaults to v2 and the verifier requires v2 for dossiers
+    at schema_version 1.3.0 or later."""
     from eth_account import Account
     from eth_account.messages import encode_defunct
-    message = claim_message(dossier.get("base_tx_hash"), dossier.get("soul_hash"))
+    if str(version).lower() == "v1":
+        message = claim_message(dossier.get("base_tx_hash"), dossier.get("soul_hash"))
+    else:
+        if icon_bytes is None:
+            raise ValueError("a v2 claim signature needs the committed icon bytes (bundle hash).")
+        dossier["claim_signature_version"] = "v2"
+        dossier["claim_soul_hash"] = str(dossier.get("soul_hash", "")).lower()
+        dossier["claim_bundle_sha256"] = bundle_sha256(dossier, icon_bytes)
+        message = claim_message_v2(dossier.get("base_tx_hash"), dossier.get("claim_soul_hash"),
+                                   dossier.get("claim_bundle_sha256"))
     signed = Account.sign_message(encode_defunct(text=message), private_key=private_key)
     sig = signed.signature.hex()
     return sig if sig.startswith("0x") else "0x" + sig
+
+
+# --- The update signature (L-15) ---------------------------------------------
+#
+# A content change is posted as an update request and settles a flat fee. The fee
+# transaction proves PAYMENT, not authorship: a courier who watches the chain can
+# copy an owner's request (its fee tx and its files) and rewrite the content while
+# the fee still checks out. So the owner also signs the change itself:
+#
+#     thefirstwall.ai|update|v2|<slot_id>|<fee_tx>|<bundle_sha256>
+#
+# where bundle_sha256 is the same canonical dossier+icon hash the claim signature
+# binds (see BUNDLE_CANONICALIZATION). The signature is recorded on the
+# update_settlements entry it pays for and re-verified there.
+
+UPDATE_MESSAGE_PREFIX = "thefirstwall.ai|update|v2|"
+
+
+def update_message(slot_id: Any, fee_tx: Any, bundle_sha256: Any) -> str:
+    """The exact ASCII text an owner signs to authorize a paid change."""
+    return (f"{UPDATE_MESSAGE_PREFIX}{str(slot_id).lower()}|{str(fee_tx).lower()}|"
+            f"{str(bundle_sha256).lower()}")
+
+
+def sign_update(slot_id: str, fee_tx: str, bundle_sha256: str, private_key: str) -> str:
+    """The owner's update signature (never logs the key)."""
+    from eth_account import Account
+    from eth_account.messages import encode_defunct
+    signed = Account.sign_message(encode_defunct(text=update_message(slot_id, fee_tx, bundle_sha256)),
+                                  private_key=private_key)
+    sig = signed.signature.hex()
+    return sig if sig.startswith("0x") else "0x" + sig
+
+
+def verify_update_signature(slot_id: str, fee_tx: str, bundle_sha256: str,
+                            signature: Any) -> str:
+    """The signer recovered from an update signature (the verifier compares it to
+    the entry's wallet_address)."""
+    if not signature:
+        raise ValueError(
+            "update_signature is missing: sign thefirstwall.ai|update|v2|<slot_id>|<fee_tx>|"
+            "<bundle_sha256> with the owner's wallet (scripts/sign_update.py)."
+        )
+    return recover_signer(update_message(slot_id, fee_tx, bundle_sha256), signature)
 
 
 def parse_version(value: Any) -> Tuple[int, int, int]:
@@ -113,18 +254,48 @@ def claim_message_for(dossier: Dict[str, Any]) -> str:
     return claim_message(dossier.get("base_tx_hash"), original_soul_hash(dossier))
 
 
-def verify_claim_signature(dossier: Dict[str, Any]) -> str:
+def verify_claim_signature(dossier: Dict[str, Any], icon_bytes: Optional[bytes] = None) -> str:
+    """Verify `claim_signature` against the paying wallet.
+
+    v1 (absent claim_signature_version): the legacy message binds only
+    base_tx_hash + soul_hash. v2: the message binds the bundle hash, and — when
+    the exact committed bytes are supplied and the block still carries its
+    inscription bytes (no update_settlements) — the dossier + icon are re-hashed
+    and must equal the signed claim_bundle_sha256. That equality check is what
+    makes an altered manifesto or a swapped icon fail."""
     sig = dossier.get("claim_signature")
     if not sig:
         raise ValueError(
-            "claim_signature is missing: sign thefirstwall.ai|claim|<base_tx_hash>|<soul_hash> "
-            "with the paying wallet (scripts/sign_claim.py)."
+            "claim_signature is missing: sign thefirstwall.ai|claim|v2|<base_tx_hash>|"
+            "<soul_hash>|<bundle_sha256> with the paying wallet (scripts/sign_claim.py)."
         )
-    signer = recover_signer(claim_message_for(dossier), sig)
+    version = claim_signature_version(dossier)
     expected = expected_signer(dossier)
+    if version == "v1":
+        signer = recover_signer(claim_message_for(dossier), sig)
+    elif version == "v2":
+        claim_soul = str(dossier.get("claim_soul_hash", "")).lower()
+        bundle = str(dossier.get("claim_bundle_sha256", "")).lower()
+        if not HEX32_RE.match(claim_soul):
+            raise ValueError("claim_soul_hash is missing or malformed: a v2 signature names the "
+                             "inscription soul_hash (64 lowercase hex).")
+        if not HEX32_RE.match(bundle):
+            raise ValueError("claim_bundle_sha256 is missing or malformed: a v2 signature binds the "
+                             "bundle hash of the dossier body + icon (64 lowercase hex).")
+        signer = recover_signer(claim_message_v2(dossier.get("base_tx_hash"), claim_soul, bundle), sig)
+        if icon_bytes is not None and not (dossier.get("update_settlements") or []):
+            actual = bundle_sha256(dossier, icon_bytes)
+            if actual != bundle:
+                raise ValueError(
+                    "Claim Signature Violation: the dossier + icon hash to "
+                    f"{actual[:16]}…, not the signed claim_bundle_sha256 {bundle[:16]}…. The words or "
+                    "the picture changed after the payment was signed; a copied claim cannot be rewritten."
+                )
+    else:
+        raise ValueError(f"claim_signature_version must be 'v1' or 'v2' (got {version!r}).")
     if signer.lower() != expected.lower():
         raise ValueError(f"claim_signature was made by {signer}, not by the paying wallet {expected}.")
-    return f"signed by {signer}"
+    return f"signed by {signer} ({version})"
 
 
 # --- The transfer release ------------------------------------------------------

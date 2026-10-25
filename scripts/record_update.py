@@ -79,6 +79,8 @@ def main(argv: list, rpc=None, base_dir: str = BASE_DIR) -> int:
             json.dump(d, fh, indent=2)
             fh.write("\n")
         print(f"[✓] appended to update_settlements in {path}")
+        print("[*] next: sign the change — python scripts/sign_update.py " + path +
+              " --key-file key.txt --write (the fee proves payment, not authorship).")
     return 0
 
 

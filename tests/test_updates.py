@@ -35,6 +35,7 @@ import claims  # noqa: E402
 import ledger_core as core  # noqa: E402
 import record_update  # noqa: E402
 import sign_transfer  # noqa: E402
+import sign_update  # noqa: E402
 import verifier  # noqa: E402
 from test_verifier_units import identity_eth_call  # noqa: E402
 
@@ -63,6 +64,16 @@ def fee(tx=TX_FEE1, wallet=SELLER, amount=None, kind="update", at="2026-10-12T09
     if amount is None:
         amount = core.FEE_PRICES_USDC.get(kind, 0.5)
     return {"tx_hash": tx, "wallet_address": wallet, "amount_usdc": amount, "kind": kind, "at": at}
+
+
+def stamp(d, key=SELLER_KEY, icon=b"test-icon"):
+    """Stamp the newest update_settlements entry with bundle_sha256 + update_signature
+    (the owner's proof of authorship; the fee alone proves payment, not authorship)."""
+    entry = d["update_settlements"][-1]
+    entry["bundle_sha256"] = claims.bundle_sha256(d, icon)
+    entry["update_signature"] = claims.sign_update(d["slot_id"], entry["tx_hash"],
+                                                   entry["bundle_sha256"], key)
+    return d
 
 
 def inscribed(slot_id="w1-b0042", wallet=SELLER, key=SELLER_KEY, soul_hash="a" * 64, **over):
@@ -248,13 +259,13 @@ class UpdateFeeTests(unittest.TestCase):
 
     def test_one_update_one_fee(self):
         prev = inscribed()
-        ok = dict(prev, update_settlements=[fee()])
+        ok = stamp(dict(prev, update_settlements=[fee()]))
         self.assertIn("update fee 0.50 USDC", verifier.verify_update_settlements("w1-b0042", ok, prev, True))
         two = dict(prev, update_settlements=[fee(), fee(tx=TX_FEE2)])
         with self.assertRaisesRegex(ValueError, "one update, one fee"):
             verifier.verify_update_settlements("w1-b0042", two, prev, True)
         # Second update later: exactly one more.
-        later = dict(ok, update_settlements=[fee(), fee(tx=TX_FEE2)])
+        later = stamp(dict(ok, update_settlements=[fee(), fee(tx=TX_FEE2)]))
         self.assertIn("update fee", verifier.verify_update_settlements("w1-b0042", later, ok, True))
 
     def test_fee_is_paid_by_the_owner_and_is_flat(self):
@@ -266,13 +277,13 @@ class UpdateFeeTests(unittest.TestCase):
         # The same flat fee for a tier-2 block.
         prev2 = inscribed(slot_id="w1-b0600", icon_rel_path="assets/w1-b0600.webp")
         self.assertIn("update fee 0.50 USDC (owed 0.50 USDC)", verifier.verify_update_settlements(
-            "w1-b0600", dict(prev2, update_settlements=[fee(amount=0.5)]), prev2, True))
+            "w1-b0600", stamp(dict(prev2, update_settlements=[fee(amount=0.5)])), prev2, True))
         self.assertIn("update fee 7.00", verifier.verify_update_settlements(
-            "w1-b0042", dict(prev, update_settlements=[fee(amount=7.0)]), prev, True))  # overpaid, fine
+            "w1-b0042", stamp(dict(prev, update_settlements=[fee(amount=7.0)])), prev, True))  # overpaid, fine
 
     def test_a_transfer_owes_the_transfer_fee_not_the_update_fee(self):
         prev = inscribed()
-        sold = transferred(prev)
+        sold = stamp(transferred(prev))
         self.assertIn("transfer fee 5.00 USDC (owed 5.00 USDC)",
                       verifier.verify_update_settlements("w1-b0042", sold, prev, True))
         cheap = transferred(prev)
@@ -290,10 +301,36 @@ class UpdateFeeTests(unittest.TestCase):
         prev = inscribed()
         with self.assertRaisesRegex(ValueError, "this change is a 'update'"):
             verifier.verify_update_settlements("w1-b0042", dict(prev, update_settlements=[fee(kind="transfer")]), prev, True)
-        sold = transferred(prev)
+        sold = stamp(transferred(prev))
         sold["update_settlements"][-1]["kind"] = "update"
         with self.assertRaisesRegex(ValueError, "this change is a 'transfer'"):
             verifier.verify_update_settlements("w1-b0042", sold, prev, True)
+
+    def test_update_signature_is_required_and_proves_authorship(self):
+        prev = inscribed()
+        unsigned = dict(prev, update_settlements=[fee()])
+        with self.assertRaisesRegex(ValueError, "missing bundle_sha256"):
+            verifier.verify_update_settlements("w1-b0042", unsigned, prev, True)
+        signed = stamp(dict(prev, update_settlements=[fee()]))
+        self.assertIn("update fee", verifier.verify_update_settlements("w1-b0042", signed, prev, True))
+        self.assertEqual(verifier.verify_update_signatures("w1-b0042", signed), "1 signed update(s)")
+
+    def test_update_signature_from_another_wallet_is_refused(self):
+        prev = inscribed()
+        signed = stamp(dict(prev, update_settlements=[fee()]), key=STRANGER_KEY)
+        with self.assertRaisesRegex(ValueError, "not by the fee payer"):
+            verifier.verify_update_signatures("w1-b0042", signed)
+
+    def test_a_rewritten_block_breaks_the_newest_signed_bundle(self):
+        prev = inscribed()
+        signed = stamp(dict(prev, update_settlements=[fee()]), icon=b"icon")
+        signed["manifesto"] = {"en": "rewritten after the owner signed"}
+        with self.assertRaisesRegex(ValueError, "rewritten after the owner signed"):
+            verifier.verify_update_signatures("w1-b0042", signed, b"icon")
+
+    def test_legacy_unsigned_entries_are_tolerated(self):
+        prev = inscribed(update_settlements=[fee()])
+        self.assertEqual(verifier.verify_update_signatures("w1-b0042", prev), "no signed updates")
 
     def test_fee_records_only_grow(self):
         prev = inscribed(update_settlements=[fee()])
@@ -320,6 +357,24 @@ class UpdateFeeTests(unittest.TestCase):
         rpc = FakeRpc().settle(TX_FEE2, BUYER, USDC)
         with self.assertRaisesRegex(ValueError, "amount >= 5.0"):
             verifier.verify_update_fee_on_chain("w1-b0042", fee(tx=TX_FEE2, wallet=BUYER, amount=1.0, kind="transfer"), rpc=rpc)
+
+    def test_sign_update_tool(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "w1-b0042.json")
+            with open(os.path.join(td, "w1-b0042.webp"), "wb") as fh:
+                fh.write(b"icon")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(core.render(dict(inscribed(), update_settlements=[fee()])))
+            key = os.path.join(td, "key.txt")
+            with open(key, "w") as fh:
+                fh.write(SELLER_KEY)
+            self.assertEqual(sign_update.main([path, "--print-message"]), 0)
+            self.assertEqual(sign_update.main([path, "--verify"]), 1)      # not signed yet
+            self.assertEqual(sign_update.main([path, "--key-file", key, "--write"]), 0)
+            self.assertEqual(sign_update.main([path, "--verify"]), 0)
+            signed = core.load_json_strict(path)
+            self.assertEqual(verifier.verify_update_signatures("w1-b0042", signed, b"icon"),
+                             "1 signed update(s)")
 
     def test_record_update_tool(self):
         with tempfile.TemporaryDirectory() as td:
@@ -650,6 +705,21 @@ class UpdateLedgerTests(unittest.TestCase):
         self._generate()
         return d
 
+    def _stamp(self, key):
+        """Sign the newest fee entry with the exact icon bytes committed on disk."""
+        path = os.path.join(self.w1, "w1-b0042.json")
+        with open(os.path.join(self.w1, "w1-b0042.webp"), "rb") as fh:
+            icon = fh.read()
+        d = core.load_json_strict(path)
+        entry = d["update_settlements"][-1]
+        entry["bundle_sha256"] = claims.bundle_sha256(d, icon)
+        entry["update_signature"] = claims.sign_update(d["slot_id"], entry["tx_hash"],
+                                                        entry["bundle_sha256"], key)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(core.render(d))
+        self._generate()
+        return d
+
     def _run(self, prev, rpc=None, touched=True, sold_out=True):
         """Verify the slot as it stands in self.td against `prev`, the slot as main has it: the
         tree an applied request leaves, which is what an update request is verified as."""
@@ -667,6 +737,7 @@ class UpdateLedgerTests(unittest.TestCase):
         new = dict(prev, agent_urls={"home": "https://example.com"},
                    update_settlements=[fee()])
         self._write(new)
+        self._stamp(SELLER_KEY)
         rpc = FakeRpc().settle(TX_CLAIM, SELLER, USDC, block=HEAD - 5000).settle(TX_FEE1, SELLER, USDC // 2)
         report = self._run(prev, rpc)
         self.assertEqual(report["result"], "PASS", failing(report))
@@ -696,6 +767,7 @@ class UpdateLedgerTests(unittest.TestCase):
         prev = self._inscribe()
         sold = transferred(prev)
         sold = self._write(sold, manifest_text="the buyer's manifest")
+        self._stamp(BUYER_KEY)
         rpc = (FakeRpc().settle(TX_CLAIM, SELLER, USDC, block=HEAD - 5000).settle(TX_FEE1, BUYER, 5 * USDC)
                .settle(TX_SALE1, BUYER, 5 * USDC, to=SELLER))
         report = self._run(prev, rpc)
@@ -749,6 +821,7 @@ class UpdateLedgerTests(unittest.TestCase):
     def test_history_is_re_proven_on_a_full_run(self):
         prev = self._inscribe()
         sold = self._write(transferred(prev))
+        self._stamp(BUYER_KEY)
         rpc = (FakeRpc().settle(TX_CLAIM, SELLER, USDC, block=HEAD - 5000).settle(TX_FEE1, BUYER, 5 * USDC)
                .settle(TX_SALE1, BUYER, 5 * USDC, to=SELLER))
         with mock.patch.object(core, "unsold_slots_in", return_value=0):

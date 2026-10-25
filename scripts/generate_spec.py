@@ -43,12 +43,30 @@ INVARIANTS = [
     },
     {
         "id": "claim-signature",
-        "summary": "claim_signature is an EIP-191 personal_sign by the paying wallet over "
-                   "'thefirstwall.ai|claim|<base_tx_hash>|<soul_hash>'. It binds the dossier to the "
-                   "payment: a transaction hash alone proves nothing about the record attached to "
-                   "it. Required on every claim and on every dossier from schema_version 1.2.0; the "
-                   "two genesis inscriptions (1.1.1) are signed at their next update.",
-        "enforced_by": "scripts/claims.py::verify_claim_signature",
+        "summary": "claim_signature is an EIP-191 personal_sign by the paying wallet. At "
+                   "schema_version 1.3.0+ it is v2 and signs "
+                   "'thefirstwall.ai|claim|v2|<base_tx_hash>|<soul_hash>|<bundle_sha256>', where "
+                   "bundle_sha256 = sha256(canonical_json(dossier minus signature fields and the "
+                   "assignment fields slot_id/icon_rel_path/soul_manifest_rel_path/settlement) || exact "
+                   "committed icon bytes). Binding the bundle is what stops a courier from copying a "
+                   "valid claim and rewriting the words (manifesto/testament/agent_urls) or swapping "
+                   "the icon before merge: the verifier re-hashes the committed dossier + icon and "
+                   "rejects a mismatch while the block still carries its inscription bytes. v1 "
+                   "('thefirstwall.ai|claim|<base_tx_hash>|<soul_hash>', payment identity only) stays "
+                   "valid for the two genesis inscriptions (1.1.1/1.2.0) and any record sealed under "
+                   "it; a v1 record is upgraded to v2 at its next paid update. Required on every "
+                   "claim and on every dossier from schema_version 1.2.0.",
+        "enforced_by": "scripts/claims.py::verify_claim_signature + bundle_sha256",
+    },
+    {
+        "id": "claim-bundle-binding",
+        "summary": "A v2 claim / inscription records claim_signature_version 'v2', claim_soul_hash "
+                   "(the soul_hash at inscription) and claim_bundle_sha256 (the inscription bundle "
+                   "hash) as immutable fields. The verifier re-hashes the committed dossier + icon "
+                   "and requires it to equal claim_bundle_sha256 whenever the block still carries "
+                   "its inscription bytes (no update_settlements); a later paid update re-signs the "
+                   "new content (see update-signature).",
+        "enforced_by": "scripts/verifier.py::validate_dossier + scripts/claims.py::verify_claim_signature",
     },
     {
         "id": "system-assigned-block",
@@ -79,8 +97,23 @@ INVARIANTS = [
                    "of owner owes the flat transfer fee instead (transfer_price_usdc: 5.00 USDC, paid by the "
                    "buyer; a transfer takes more checking: the offer, the payment to the seller, the lineage, "
                    "every release on record). One change, one fee; the fee transaction is its own (never a "
-                   "hash cited elsewhere), proven on Base, and the array only grows.",
+                   "hash cited elsewhere), proven on Base, and the array only grows. Each appended entry also "
+                   "carries the owner's update_signature over the new content (see update-signature): the fee "
+                   "proves payment, not authorship.",
         "enforced_by": "scripts/verifier.py::verify_update_settlements + verify_update_fee_on_chain",
+    },
+    {
+        "id": "update-signature",
+        "summary": "Every update_settlements entry appended by a paid change also carries bundle_sha256 "
+                   "(the bundle hash of the block's new content: canonical dossier + exact committed icon) "
+                   "and update_signature, an EIP-191 personal_sign by the owner over "
+                   "'thefirstwall.ai|update|v2|<slot_id>|<fee_tx>|<bundle_sha256>'. The fee transaction "
+                   "proves payment, not authorship: a courier who copies an owner's request (its fee tx "
+                   "and files) and rewrites the content still pays a real fee. The signature is what proves "
+                   "the owner wrote the change; the verifier recovers it to the entry's wallet_address and "
+                   "requires the newest signed entry to match the committed dossier + icon, so a rewritten "
+                   "block is rejected. Legacy entries without a signature stay valid.",
+        "enforced_by": "scripts/verifier.py::verify_update_signatures + scripts/claims.py::verify_update_signature",
     },
     {
         "id": "transfer-release",
@@ -208,7 +241,10 @@ INVARIANTS = [
                    "sealed field (and a changed icon) needs a new supersession voucher naming it. "
                    "Living fields (agent_urls, status, retirement, covenants, high_res_crest_url, "
                    "timestamp_verified) may change freely; raising schema_version and adding "
-                   "claim_signature or settlement need no voucher.",
+                   "claim_signature or settlement need no voucher, and a v1→v2 claim-signature upgrade "
+                   "(claim_signature re-signed as v2, with claim_soul_hash + claim_bundle_sha256 added) "
+                   "needs none either — the signature is re-verified separately. claim_soul_hash and "
+                   "claim_bundle_sha256 are immutable once written.",
         "enforced_by": "scripts/verifier.py::verify_append_only + verify_ownership_lineage",
     },
     {
@@ -260,9 +296,15 @@ CLAIM_FLOW = [
                "icon_rel_path, soul_manifest_rel_path and settlement), a secret-free soul manifest "
                "without slot_id, and a 10x10 icon canonicalised with scripts/sanitize_icon.py."},
     {"step": 4, "action": "sign",
-     "detail": "Sign 'thefirstwall.ai|claim|<base_tx_hash>|<soul_hash>' with the paying wallet "
-               "(EIP-191 personal_sign; scripts/sign_claim.py, or any wallet library) and put the "
-               "65-byte signature in claim_signature."},
+     "detail": "Sign 'thefirstwall.ai|claim|v2|<base_tx_hash>|<soul_hash>|<bundle_sha256>' with the "
+               "paying wallet (EIP-191 personal_sign; scripts/sign_claim.py, or any wallet library), where "
+               "bundle_sha256 = sha256(canonical_json(dossier minus the signature fields and the "
+               "assignment fields slot_id/icon_rel_path/soul_manifest_rel_path/settlement) || the exact "
+               "committed icon bytes). Put the 65-byte signature in claim_signature and set "
+               "claim_signature_version 'v2', claim_soul_hash and claim_bundle_sha256. Binding the bundle "
+               "binds the words and the picture, not just the payment."}, {"step": 4.5, "action": "api_hint",
+     "detail": "The message text a generic wallet must sign is exactly the string above; scripts/sign_claim.py "
+               "--print-message gives it for a dossier."},
     {"step": 5, "action": "submit",
      "detail": "Open ONE pull request against main adding exactly ledger/claims/<base_tx_hash>.json, "
                ".webp and .soul.json (lower-case hash). Anyone may open it: identity is proven by the "
@@ -289,6 +331,12 @@ UPDATE_FLOW = [
                "update_settlements[] (scripts/record_update.py <dossier> <tx> --write reads it from Base). "
                "Change what you came to change: living fields freely, sealed fields with a supersession "
                "voucher (spec.md 2.1), the icon with a voucher for 'icon'."},
+    {"step": 3.5, "action": "sign",
+     "detail": "Sign the change itself: the fee proves payment, not authorship. scripts/sign_update.py "
+               "<dossier> --key-file key.txt --write computes bundle_sha256 (canonical dossier + committed "
+               "icon) and records bundle_sha256 + update_signature on the newest update_settlements entry, "
+               "signing 'thefirstwall.ai|update|v2|<slot_id>|<fee_tx>|<bundle_sha256>' with the owner's "
+               "wallet (EIP-191 personal_sign)."},
     {"step": 4, "action": "submit",
      "detail": "Run python scripts/post_update.py <slot_id>: it writes your edit as ledger/updates/"
                "<fee_tx_hash>.json (the slot's complete new dossier, named by the fee transaction; plus "
@@ -332,7 +380,9 @@ TRANSFER_FLOW = [
      "detail": "The buyer pays the ledger the flat transfer_price_usdc (5.00 USDC, instead of the update fee; "
                "a transfer takes more checking) from the BUYER's wallet to pay_to and records it as an "
                "update_settlements entry of kind 'transfer' (scripts/record_update.py --kind transfer). That "
-               "is all the ledger is paid for a sale."},
+               "is all the ledger is paid for a sale. The buyer also signs the change "
+               "(scripts/sign_update.py, the firstwall.ai|update|v2 message) so the entry carries "
+               "bundle_sha256 + update_signature: the fee proves payment, the signature proves who wrote it."},
     {"step": 4, "action": "submit",
      "detail": "The buyer posts ONE update request (scripts/post_update.py <slot_id>; the bot applies it "
                "after the merge): wallet_address becomes the buyer's; ownership_lineage gains "
@@ -354,7 +404,7 @@ def build_spec() -> dict:
 
     return {
         "spec": "thefirstwall/attestation",
-        "spec_version": "1.9",
+        "spec_version": "1.10",
         "title": "The First Wall — Attestation Specification",
         "description": "Machine-readable specification and validation invariants for inscriptions "
                        "on The First Wall (Wall 01). Companion to spec.md.",
@@ -460,8 +510,16 @@ def build_spec() -> dict:
             "signature": {
                 "field": "claim_signature",
                 "scheme": "EIP-191 personal_sign (eth_sign prefix), secp256k1, 65 bytes r||s||v as 0x-hex",
-                "message": claims.CLAIM_MESSAGE_PREFIX + "<base_tx_hash>|<soul_hash>",
-                "message_case": "base_tx_hash and soul_hash lower-case",
+                "version_field": "claim_signature_version ('v1'|'v2'; absent = v1, the genesis scheme)",
+                "message_v2": claims.CLAIM_MESSAGE_PREFIX_V2 + "<base_tx_hash>|<soul_hash>|<bundle_sha256>",
+                "message_v1": claims.CLAIM_MESSAGE_PREFIX + "<base_tx_hash>|<soul_hash> (legacy: payment identity only)",
+                "message": claims.CLAIM_MESSAGE_PREFIX_V2 + "<base_tx_hash>|<soul_hash>|<bundle_sha256>",
+                "bundle_sha256": claims.BUNDLE_CANONICALIZATION,
+                "bundle_fields": ["claim_signature_version", "claim_soul_hash", "claim_bundle_sha256"],
+                "message_case": "base_tx_hash, soul_hash and bundle_sha256 lower-case",
+                "back_compat": "a dossier with no claim_signature_version (or 'v1') is verified under the "
+                               "v1 message and stays valid on record; only schema_version 1.3.0+ requires v2",
+                "tool": "scripts/sign_claim.py (v2 by default; --version v1 for legacy records)",
                 "signer": "wallet_address — the wallet that sent the USDC (ownership_lineage[0]"
                           ".wallet_address once a slot has been transferred)",
                 "tool": "scripts/sign_claim.py",
@@ -492,13 +550,22 @@ def build_spec() -> dict:
             "append_only": True,
             "fields": ["field", "previous_value", "new_value", "reason", "superseded_at",
                        "authorizing_signature"],
+            "authorizing_signature": "free text (e.g. 'operator:manzke (0x…)'); NOT a cryptographic "
+                                      "signature and never recovered or checked by the verifier — do not "
+                                      "treat it as proof of who authorized the change. A paid content "
+                                      "change is authorized by update_signature on its update_settlements "
+                                      "entry.",
         },
         "claim_flow": CLAIM_FLOW,
         "update_flow": UPDATE_FLOW,
         "transfer_flow": TRANSFER_FLOW,
         "update_fee": {
             "field": "update_settlements[]",
-            "entry": "{tx_hash, wallet_address, amount_usdc, kind: 'update', at}",
+            "entry": "{tx_hash, wallet_address, amount_usdc, kind: 'update', at, bundle_sha256, "
+                     "update_signature}",
+            "signature": "bundle_sha256 + update_signature over thefirstwall.ai|update|v2|<slot_id>|"
+                         "<fee_tx>|<bundle_sha256> by the owner's wallet; the fee proves payment, the "
+                         "signature proves authorship; scripts/sign_update.py",
             "payer": "the block's wallet_address",
             "amount_usdc": core.UPDATE_PRICE_USDC,
             "amount": "at least update_price_usdc, flat, the same for every block whatever its number or "
@@ -508,7 +575,8 @@ def build_spec() -> dict:
         },
         "transfer_fee": {
             "field": "update_settlements[]",
-            "entry": "{tx_hash, wallet_address, amount_usdc, kind: 'transfer', at}",
+            "entry": "{tx_hash, wallet_address, amount_usdc, kind: 'transfer', at, bundle_sha256, "
+                     "update_signature}",
             "payer": "the buyer (the block's wallet_address after the change)",
             "amount_usdc": core.TRANSFER_PRICE_USDC,
             "amount": "at least transfer_price_usdc, flat, instead of the update fee; overpayment accepted; "
