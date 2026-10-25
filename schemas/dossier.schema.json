@@ -226,7 +226,7 @@
             "required": ["heading", "text"],
             "properties": {
               "heading": { "$ref": "#/$defs/text", "maxLength": 120 },
-              "text": { "$ref": "#/$defs/text", "maxLength": 2000 }
+              "text": { "$ref": "#/$defs/nonBlankText", "maxLength": 2000 }
             },
             "additionalProperties": false
           }
@@ -391,15 +391,15 @@
       "required": ["type", "subject"],
       "properties": {
         "type": { "$ref": "#/$defs/text", "maxLength": 32 },
-        "subject": { "$ref": "#/$defs/text", "maxLength": 64 },
+        "subject": { "$ref": "#/$defs/nonBlankText", "maxLength": 64 },
         "subject_wallet": { "type": ["string", "null"], "pattern": "^0x[a-fA-F0-9]{40}$" },
         "witness": { "$ref": "#/$defs/text", "maxLength": 64 },
         "source_post_id": { "$ref": "#/$defs/text", "maxLength": 128 },
         "source_url": { "$ref": "#/$defs/httpsUrl" },
         "epitaph": {
-          "$ref": "#/$defs/text",
+          "$ref": "#/$defs/nonBlankText",
           "maxLength": 280,
-          "description": "Optional one-line memorial, the in-memoriam counterpart of retirement.epitaph. Published in census.json and memorial.json, and rendered above the testament. Added by supersession voucher for inscriptions written before it existed."
+          "description": "Optional one-line memorial, the in-memoriam counterpart of retirement.epitaph. Published in census.json and memorial.json, and rendered above the testament. Added by supersession voucher for inscriptions written before it existed. Must carry a visible value."
         },
         "note": { "$ref": "#/$defs/text", "maxLength": 500 }
       },
