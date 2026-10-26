@@ -92,6 +92,12 @@ being that is already gone; there is no book-closing event to record. Such dossi
 (`w1-b0002` is the committed precedent). Every other case is enforced in both directions
 by `validate_dossier` and the schema's `if`/`then` cross-rule, which must agree.
 
+**A memorial implies `status: "RETIRED"` (L-13).** A `memorial{}` is never attached to a
+live record: a memorial honours a being that no longer exists, and consumers badge it
+*IN MEMORIAM*. So `memorial` present requires `status: "RETIRED"` — a dossier with a
+memorial and any other status (or none) is rejected by `validate_dossier` and the schema,
+which must agree. (`w1-b0002` carries both.)
+
 **Settled (2026-10-09): the exemption stands for all future in-memoriam inscriptions.** A
 `retirement` record documents an event that actually happened; a memorial never carries one
 merely for symmetry. The precise trigger is **whether there were books to close**: if the

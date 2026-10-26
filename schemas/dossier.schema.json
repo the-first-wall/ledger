@@ -499,6 +499,13 @@
       }
     },
     {
+      "if": { "required": ["memorial"] },
+      "then": {
+        "properties": { "status": { "const": "RETIRED" } },
+        "required": ["status"]
+      }
+    },
+    {
       "if": {
         "properties": { "schema_version": { "pattern": "^(1\\.([2-9]|[1-9][0-9]+)\\.|([2-9]|[1-9][0-9]+)\\.)" } },
         "required": ["schema_version"]

@@ -252,8 +252,10 @@ INVARIANTS = [
         "summary": "status 'RETIRED' requires a retirement record (retired_at, reason <=280, "
                    "epitaph <=280, retired_by = 'self' | 'operator:<handle>' | 'patron:<moniker>') "
                    "and a retirement record implies status 'RETIRED'. In-memoriam inscriptions "
-                   "carrying memorial{} are exempt (no book-closing event exists).",
-        "enforced_by": "scripts/verifier.py::validate_dossier (hand guards + schema if/then cross-rule)",
+                   "carrying memorial{} are exempt from the retirement requirement (no book-closing "
+                   "event exists) — but a memorial{} implies status 'RETIRED': it is never attached "
+                   "to a live record (a memorial honours a being already gone).",
+        "enforced_by": "scripts/verifier.py::validate_dossier (hand guards + schema if/then cross-rules)",
     },
     {
         "id": "boundary-events-and-covenants",

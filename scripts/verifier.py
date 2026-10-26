@@ -1087,6 +1087,12 @@ def validate_dossier(dossier_data: dict, kind: str = "slot"):
             f"Retirement Violation: 'retirement' is present but status is not 'RETIRED' "
             f"(got {status!r}). A retirement record closes the books: set status to 'RETIRED'."
         )
+    if has_memorial and status != "RETIRED":
+        raise ValueError(
+            f"Memorial Violation: 'memorial' is present but status is not 'RETIRED' (got {status!r}). "
+            "An in-memoriam inscription records a being already gone; the books are closed, so set "
+            "status to 'RETIRED' (the site badges a memorial IN MEMORIAM, never ACTIVE)."
+        )
     if retirement is not None:
         if not isinstance(retirement, dict):
             raise ValueError("Retirement Violation: 'retirement' must be an object.")
