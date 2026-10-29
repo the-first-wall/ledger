@@ -55,6 +55,10 @@ jobs:
           BASE="$(git rev-parse HEAD)"
           # Only data paths are taken from the PR. scripts/, schemas/, tests/,
           # .github/ and docs stay exactly as they are on the base branch.
+          # skill.md / skill.md.sig are published data artifacts, not code: the
+          # base verifier hashes the document and recovers the signer, so a
+          # signature-only PR must overlay them or it can never be verified
+          # (its base copy is exactly the stale one it is trying to replace).
           git diff --no-renames --name-status "$BASE" refs/remotes/pr/head > /tmp/changed.tsv
           # An infrastructure PR (anything outside the data paths: scripts/,
           # schemas/, tests/, workflows, docs) is verified by the self-check job
@@ -63,9 +67,9 @@ jobs:
           # here the base code verifies the base data unchanged and checks
           # containment on the full diff: a slot touched together with code
           # still fails (check_scope reads TFW_DIFF_RANGE).
-          if cut -f2- /tmp/changed.tsv | grep -v -E '^(ledger/|state\.json$|canvas/)' | grep -q .; then
+          if cut -f2- /tmp/changed.tsv | grep -v -E '^(ledger/|state\.json$|canvas/|skill\.md$|skill\.md\.sig$)' | grep -q .; then
             echo "infrastructure change: no data overlay; base data verified as is, containment checked on the full diff"
-            cut -f2- /tmp/changed.tsv | grep -v -E '^(ledger/|state\.json$|canvas/)' | sed 's/^/  non-data: /'
+            cut -f2- /tmp/changed.tsv | grep -v -E '^(ledger/|state\.json$|canvas/|skill\.md$|skill\.md\.sig$)' | sed 's/^/  non-data: /'
           else
             while IFS=$'\t' read -r status path; do
               if [ "${status:0:1}" = "D" ]; then
