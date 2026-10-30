@@ -60,9 +60,15 @@
     "contract": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
     "pay_to": "0xbbF4D6B954e97C2C4fbC4e89B7933cDD7e4D9f23",
     "max_per_claim_usdc": 1.0,
-    "tier": "genesis",
+    "max_per_claim_usdc_by_tier": {
+      "genesis": 1.0,
+      "tier-2": 2.5,
+      "tier-3": 5.0,
+      "tier-4": 10.0,
+      "tier-5": 20.0
+    },
     "claims_per_payment": 1,
-    "note": "The cap is the genesis-tier price (state.json current_floor_usdc); a later tier raises it, never silently."
+    "note": "max_per_claim_usdc is the price of the tier active at state.json next_available_slot (= current_floor_usdc); max_per_claim_usdc_by_tier mirrors state.json pricing_tiers exactly. The verifier binds both to state.json, so a tier change updates the cap by rule, never silently."
   },
   "pull_request": {
     "count": 1,

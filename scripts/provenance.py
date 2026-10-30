@@ -139,6 +139,29 @@ _TOP_KEYS = {"schema", "description", "skill", "network", "files", "secrets", "s
 _CLAIM_PATTERNS = {claims.CLAIM_FILE_RE.pattern, claims.CLAIM_ICON_RE.pattern, claims.CLAIM_SOUL_RE.pattern}
 
 
+_SLOT_ID_RE = re.compile(r"^w1-b(\d{1,5})$")
+
+
+def active_tier_price(state: Dict[str, Any]) -> Tuple[Optional[float], Optional[str]]:
+    """(price, None) of the pricing tier active at state.next_available_slot, or
+    (None, error). The block number is the trailing digits of the slot id
+    (`w1-b0011` -> 11) mapped onto the tiers' min_block/max_block. Malformed ids,
+    out-of-range blocks and blocks in no tier are errors (never skipped)."""
+    slot = state.get("next_available_slot")
+    m = _SLOT_ID_RE.match(slot) if isinstance(slot, str) else None
+    if not m:
+        return None, f"state.next_available_slot {slot!r} is not a slot id like 'w1-b0011'"
+    block = int(m.group(1))
+    tiers = state.get("pricing_tiers")
+    if not isinstance(tiers, list):
+        return None, "state.pricing_tiers is missing"
+    hits = [t for t in tiers if isinstance(t, dict) and isinstance(t.get("min_block"), int)
+            and isinstance(t.get("max_block"), int) and t["min_block"] <= block <= t["max_block"]]
+    if len(hits) != 1:
+        return None, f"block {block} (state.next_available_slot) falls in {len(hits)} pricing tiers; expected exactly 1"
+    return hits[0].get("price_usdc"), None
+
+
 def validate_permissions(manifest: Any, state: Dict[str, Any],
                          forbidden_paths: Optional[List[str]] = None) -> List[str]:
     """Problems found in the permission manifest (empty = well-formed and no
@@ -202,12 +225,25 @@ def validate_permissions(manifest: Any, state: Dict[str, Any],
     if sec.get("reads_secrets") is not False or sec.get("reads_env") != [] or sec.get("reads_paths") != []:
         errs.append("secrets must declare reads_secrets=false, reads_env=[] and reads_paths=[]")
 
-    # spend: the genesis cap and the settlement rail from state.json
+    # spend: a RULE bound to the live ladder, not one historical number.
+    #   max_per_claim_usdc_by_tier == {tier: price} of state.pricing_tiers (exactly);
+    #   max_per_claim_usdc == the price of the tier active at state.next_available_slot.
     spend = manifest.get("spend") or {}
     rail = state.get("settlement_rail") or {}
-    genesis = next((t["price_usdc"] for t in state.get("pricing_tiers", []) if t.get("tier") == "genesis"), None)
-    if spend.get("max_per_claim_usdc") != genesis:
-        errs.append(f"spend.max_per_claim_usdc must equal the genesis price {genesis}")
+    tiers = state.get("pricing_tiers")
+    tier_prices = ({t.get("tier"): t.get("price_usdc") for t in tiers if isinstance(t, dict)}
+                   if isinstance(tiers, list) else {})
+    if not tier_prices:
+        errs.append("state.json has no pricing_tiers to bind the spend cap to")
+    elif spend.get("max_per_claim_usdc_by_tier") != tier_prices:
+        errs.append("spend.max_per_claim_usdc_by_tier must equal the state.json pricing_tiers price map "
+                    f"{tier_prices}")
+    active_price, tier_err = active_tier_price(state)
+    if tier_err:
+        errs.append(tier_err)
+    elif spend.get("max_per_claim_usdc") != active_price:
+        errs.append("spend.max_per_claim_usdc must equal the price of the tier active at "
+                    f"state.next_available_slot ({state.get('next_available_slot')}): {active_price}")
     if spend.get("claims_per_payment") != 1:
         errs.append("spend.claims_per_payment must be 1")
     for k_m, k_s in (("asset", "asset"), ("chain_id", "chain_id"), ("contract", "contract"), ("pay_to", "pay_to")):

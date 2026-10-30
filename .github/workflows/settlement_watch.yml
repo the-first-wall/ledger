@@ -1,0 +1,94 @@
+name: Settlement watch (heartbeat)
+
+# B-34: scans Base for USDC paid to the x402 payee and publishes the scan
+# receipt (ops/scan-receipt.json) + cursor, so "no new settlements" is a
+# falsifiable, timestamped statement. Read-only on chain; no secrets.
+#
+# Publishing: direct commit to main, like the web repo's "Sync from Ledger" job.
+# No other ledger workflow pushes main (anchor_root / assign_slots / apply_updates
+# open bot/* PRs). If, and only if, the push to main is REJECTED (branch
+# protection), the job falls back to force-updating one branch, bot/scan-receipt,
+# and opening/refreshing a single PR. The path taken is written to the job summary.
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: settlement-watch
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Scan (stdlib only, read-only)
+        id: scan
+        run: |
+          set +e
+          python ops/settlement_watch.py --json > /tmp/receipt.out
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+          cat /tmp/receipt.out
+
+      - name: Publish receipt and cursor
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Commit when anything substantive changed (everything but the two
+          # timestamps) or when the committed heartbeat is older than 6 hours.
+          python - <<'PY' > /tmp/publish
+          import json, subprocess, datetime as dt
+          def load(s):
+              try: return json.loads(s)
+              except Exception: return None
+          new = json.load(open("ops/scan-receipt.json"))
+          old = load(subprocess.run(["git", "show", "HEAD:ops/scan-receipt.json"], capture_output=True, text=True).stdout)
+          strip = lambda d: {k: v for k, v in (d or {}).items() if k not in ("started_at", "finished_at")}
+          stale = True
+          if old and old.get("finished_at"):
+              age = dt.datetime.now(dt.timezone.utc) - dt.datetime.strptime(old["finished_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc)
+              stale = age > dt.timedelta(hours=6)
+          print("yes" if (strip(new) != strip(old) or stale) else "no")
+          PY
+          if [ "$(cat /tmp/publish)" != "yes" ]; then
+            git checkout -- ops/scan-receipt.json ops/settlement-cursor.json 2>/dev/null || true
+            echo "Receipt unchanged (heartbeat fresh): nothing to publish." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git config user.name "the-first-wall-bot"
+          git config user.email "bot@thefirstwall.ai"
+          git add ops/scan-receipt.json ops/settlement-cursor.json
+          git commit -m "ops: settlement scan receipt $(date -u +%Y-%m-%dT%H:%MZ)"
+          git pull --rebase origin main || true
+          if git push origin HEAD:main; then
+            echo "Published directly to main." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Push to main rejected; falling back to bot/scan-receipt PR." | tee -a "$GITHUB_STEP_SUMMARY"
+            git push --force origin HEAD:refs/heads/bot/scan-receipt
+            if [ -z "$(gh pr list --head bot/scan-receipt --state open --json number --jq '.[0].number')" ]; then
+              gh pr create --base main --head bot/scan-receipt \
+                --title "ops: settlement scan receipt" \
+                --body "Automated settlement-watch heartbeat (ops/scan-receipt.json). Refreshed in place by .github/workflows/settlement_watch.yml."
+            fi
+          fi
+
+      - name: Fail visibly if the scan failed
+        if: ${{ steps.scan.outputs.code != '0' }}
+        run: |
+          echo "::error::settlement scan exited ${{ steps.scan.outputs.code }}; see the receipt's errors[]."
+          exit 1

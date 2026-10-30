@@ -1,0 +1,72 @@
+name: Verification probe (live endpoints)
+
+# E-10: the ONLY place the live HTTP probes run (never unit tests, never --check).
+# Writes verification.json with timestamped GETs of the x402 manifest and the
+# canonical state.json, then publishes it the same way settlement_watch.yml does:
+# direct commit to main, falling back to one bot/verification PR if main rejects
+# the push. Read-only; no secrets beyond GITHUB_TOKEN.
+
+on:
+  schedule:
+    - cron: '23 */6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: verification-probe
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Probe and write verification.json
+        id: probe
+        run: |
+          set +e
+          python scripts/verification.py --probe
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Publish verification.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "the-first-wall-bot"
+          git config user.email "bot@thefirstwall.ai"
+          git add verification.json
+          if git diff --cached --quiet; then
+            echo "verification.json unchanged." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git commit -m "ops: verification.json probe $(date -u +%Y-%m-%dT%H:%MZ)"
+          git pull --rebase origin main || true
+          if git push origin HEAD:main; then
+            echo "Published directly to main." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Push to main rejected; falling back to bot/verification PR." | tee -a "$GITHUB_STEP_SUMMARY"
+            git push --force origin HEAD:refs/heads/bot/verification
+            if [ -z "$(gh pr list --head bot/verification --state open --json number --jq '.[0].number')" ]; then
+              gh pr create --base main --head bot/verification \
+                --title "ops: verification.json probe" \
+                --body "Automated live-endpoint probe (.github/workflows/verification_probe.yml)."
+            fi
+          fi
+
+      - name: Fail visibly if a check failed
+        if: ${{ steps.probe.outputs.code != '0' }}
+        run: |
+          echo "::error::a verification check failed; see verification.json."
+          exit 1
