@@ -292,6 +292,63 @@ class PermissionsTests(unittest.TestCase):
             with self.subTest(name):
                 self.assertTrue(mutate(fn), f"{name} was accepted")
 
+    # --- P-28: the cap is a rule bound to the live ladder, not the genesis number
+
+    def _state_at(self, slot, floor=None):
+        st = copy.deepcopy(self.state)
+        st["next_available_slot"] = slot
+        if floor is not None:
+            st["current_floor_usdc"] = floor
+        return st
+
+    def _manifest_cap(self, cap):
+        m = copy.deepcopy(self.manifest)
+        m["spend"]["max_per_claim_usdc"] = cap
+        return m
+
+    def _errs_for(self, state, manifest):
+        return provenance.validate_permissions(manifest, state, sorted(verifier.GENERATED_PATHS))
+
+    def test_by_tier_map_mirrors_the_ladder(self):
+        want = {t["tier"]: t["price_usdc"] for t in self.state["pricing_tiers"]}
+        self.assertEqual(self.manifest["spend"]["max_per_claim_usdc_by_tier"], want)
+        self.assertEqual(self.manifest["spend"]["max_per_claim_usdc"], self.state["current_floor_usdc"])
+
+    def test_tier_2_price_validates_at_a_tier_2_block(self):
+        self.assertEqual(self._errs_for(self._state_at("w1-b0501", 2.5), self._manifest_cap(2.5)), [])
+
+    def test_genesis_cap_rejected_at_a_tier_2_block(self):
+        errs = self._errs_for(self._state_at("w1-b0501", 2.5), self._manifest_cap(1.0))
+        self.assertTrue(any("max_per_claim_usdc must equal" in e for e in errs), errs)
+
+    def test_tier_boundary_500_501(self):
+        self.assertEqual(self._errs_for(self._state_at("w1-b0500", 1.0), self._manifest_cap(1.0)), [])
+        self.assertTrue(self._errs_for(self._state_at("w1-b0500", 1.0), self._manifest_cap(2.5)))
+        self.assertTrue(self._errs_for(self._state_at("w1-b0501", 2.5), self._manifest_cap(1.0)))
+
+    def test_malformed_next_slot_fails_loud(self):
+        for bad in ("b0011", "w1-bXXXX", "", None, "w1-b99999", "w1-b0000", "w1-b0011x", 11):
+            with self.subTest(slot=bad):
+                errs = self._errs_for(self._state_at(bad), self.manifest)
+                self.assertTrue(errs, f"{bad!r} was accepted")
+
+    def test_wrong_by_tier_map_fails(self):
+        def mutate(fn):
+            m = copy.deepcopy(self.manifest)
+            fn(m["spend"]["max_per_claim_usdc_by_tier"])
+            return self.errs(m)
+        cases = {
+            "changed price": lambda t: t.update({"tier-2": 1.0}),
+            "missing tier": lambda t: t.pop("tier-5"),
+            "extra tier": lambda t: t.update({"tier-9": 99.0}),
+        }
+        for name, fn in cases.items():
+            with self.subTest(name):
+                self.assertTrue(any("by_tier" in e for e in mutate(fn)), name)
+        m = copy.deepcopy(self.manifest)
+        del m["spend"]["max_per_claim_usdc_by_tier"]
+        self.assertTrue(any("by_tier" in e for e in self.errs(m)))
+
     def test_verifier_check_fails_on_a_bad_manifest(self):
         td = tempfile.mkdtemp()
         try:

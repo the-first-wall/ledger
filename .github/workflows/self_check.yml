@@ -50,3 +50,4 @@ jobs:
         run: |
           python scripts/generate_state.py --check
           python scripts/generate_spec.py --check
+          python scripts/verification.py --check
