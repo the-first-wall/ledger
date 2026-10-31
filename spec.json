@@ -1894,7 +1894,7 @@
     },
     {
       "id": "settlement-index",
-      "summary": "ledger/settlements.json maps every cited transaction hash (base_tx_hash, patron.tx_hash, ownership_lineage[].transfer_tx_hash, update_settlements[].tx_hash) to the one slot it settles; it is generated, drift-gated, and a hash cited by two slots fails.",
+      "summary": "ledger/settlements.json maps every cited transaction hash (base_tx_hash, patron.tx_hash, ownership_lineage[].transfer_tx_hash, update_settlements[].tx_hash) to the one slot it settles, and records the facts an invoice needs for each: the payer (wallet_address), amount_usdc, kind (inscription/update/transfer/patron/sale) and at (ISO timestamp) where the dossier proves them, so an invoice can be issued on request from the index alone; it is generated, drift-gated, and a hash cited by two slots fails.",
       "enforced_by": "scripts/ledger_core.py::build_settlements + scripts/verifier.py"
     },
     {

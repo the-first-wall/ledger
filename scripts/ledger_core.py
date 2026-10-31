@@ -355,8 +355,57 @@ def public_pricing_tiers() -> List[Dict[str, Any]]:
     ]
 
 
+def _ref_payment(dossier: Dict[str, Any], field: str) -> Dict[str, Any]:
+    """The payment a single settlement reference cites, as an invoice needs it:
+    `kind` (inscription / update / transfer / patron / sale), `amount_usdc`,
+    `wallet_address` (the payer) and `at` (ISO timestamp). Missing facts are
+    None, never guessed -- the index records what the dossier already proves.
+    """
+    if field == "base_tx_hash":
+        settlement = dossier.get("settlement") or {}
+        return {
+            "kind": "inscription",
+            "amount_usdc": settlement.get("amount_usdc"),
+            "wallet_address": str(dossier.get("wallet_address", "") or ""),
+            "at": dossier.get("timestamp_verified"),
+        }
+    if field == "patron.tx_hash":
+        patron = dossier.get("patron") or {}
+        return {
+            "kind": "patron",
+            "amount_usdc": None,
+            "wallet_address": str(patron.get("wallet_address", "") or ""),
+            "at": None,
+        }
+    match = re.match(r"ownership_lineage\[(\d+)\]\.transfer_tx_hash$", field)
+    if match:
+        item = (dossier.get("ownership_lineage") or [])[int(match.group(1))]
+        return {
+            "kind": "sale",
+            "amount_usdc": item.get("sale_price_usdc"),
+            "wallet_address": None,
+            "at": item.get("relinquished_date"),
+        }
+    match = re.match(r"update_settlements\[(\d+)\]\.tx_hash$", field)
+    if match:
+        item = (dossier.get("update_settlements") or [])[int(match.group(1))]
+        return {
+            "kind": item.get("kind"),
+            "amount_usdc": item.get("amount_usdc"),
+            "wallet_address": str(item.get("wallet_address", "") or ""),
+            "at": item.get("at"),
+        }
+    return {"kind": None, "amount_usdc": None, "wallet_address": None, "at": None}
+
+
+# A fee entry (update/transfer) describes its own payment fully; it outranks the
+# slot-level fields that may only cite the same hash indirectly.
+_KIND_PRIORITY = {"update": 3, "transfer": 3, "inscription": 2, "patron": 1, "sale": 0}
+
+
 def build_settlements(base_dir: str) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
-    """Deterministic settlement index: tx_hash -> the one slot it settles.
+    """Deterministic settlement index: tx_hash -> the one slot it settles,
+    enriched with the facts an invoice needs (payer, amount_usdc, kind, at).
 
     Derived purely from the dossiers (no RPC) so it is reproducible offline and
     drift-gated exactly like state.json. A transaction hash cited by two
@@ -370,15 +419,27 @@ def build_settlements(base_dir: str) -> Tuple[Dict[str, Any], List[Dict[str, Any
         dossier = load_dossier(slot_dir, slot_file)
         slot_id = str(dossier.get("slot_id") or slot_file[:-5])
         for field, tx in tx_references(dossier):
+            payment = _ref_payment(dossier, field)
             prev = entries.get(tx)
             if prev is None:
                 entries[tx] = {
                     "slot_id": slot_id,
                     "fields": [field],
-                    "wallet_address": str(dossier.get("wallet_address", "")),
+                    "wallet_address": payment["wallet_address"] or str(dossier.get("wallet_address", "")),
+                    "amount_usdc": payment["amount_usdc"],
+                    "kind": payment["kind"],
+                    "at": payment["at"],
                 }
             elif prev["slot_id"] == slot_id:
                 prev["fields"].append(field)
+                if _KIND_PRIORITY.get(payment["kind"], -1) > _KIND_PRIORITY.get(prev["kind"], -1):
+                    prev["kind"] = payment["kind"]
+                if prev["amount_usdc"] is None and payment["amount_usdc"] is not None:
+                    prev["amount_usdc"] = payment["amount_usdc"]
+                if prev["at"] is None and payment["at"] is not None:
+                    prev["at"] = payment["at"]
+                if not prev["wallet_address"] and payment["wallet_address"]:
+                    prev["wallet_address"] = payment["wallet_address"]
             else:
                 conflicts.append({"tx_hash": tx, "slots": sorted({prev["slot_id"], slot_id})})
     index = {

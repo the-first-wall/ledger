@@ -240,9 +240,21 @@ class LedgerCoreTests(unittest.TestCase):
         self.assertEqual(core.render(a), core.render(b))
         self.assertEqual(conflicts, [])
         self.assertEqual(a["count"], len(a["settlements"]))
+        any_amount = False
         for tx, entry in a["settlements"].items():
             self.assertEqual(tx, tx.lower())
             self.assertRegex(entry["slot_id"], r"^w1-b\d{4,5}$")
+            # invoice fields: a payer, the amount and a timestamp are recorded
+            # (None when the dossier does not prove them), so an invoice can be
+            # issued later from the index alone.
+            for key in ("wallet_address", "amount_usdc", "kind", "at"):
+                self.assertIn(key, entry)
+            if entry["amount_usdc"] is not None:
+                any_amount = True
+            if entry["kind"] in ("update", "transfer"):
+                self.assertIsNotNone(entry["amount_usdc"])
+                self.assertIsNotNone(entry["at"])
+        self.assertTrue(any_amount, "no settlement carried an amount")
 
     def test_slot_number_range(self):
         self.assertEqual(core.slot_number("w1-b0001"), 1)
