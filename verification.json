@@ -2,7 +2,7 @@
   "schema": "thefirstwall.verification/1",
   "root": "16c0c16db7484a0e036c2f7e9b51a62bbd76d63b2b93ecf2c830a0d4e8a9c405",
   "as_of_block": 52868873,
-  "ledger_commit": "a5100add0b471b533698d7e72ff29dc0760c7cda",
+  "ledger_commit": "4e68ca2105d65a35f47a06fa5492047398b51142",
   "anchor": {
     "tx": "0xfd5dacf41cd11b54e3529fdda9ac1fa679ba8d0400019083ccc1b7b7b3eab2cb",
     "block": 52868873
@@ -12,7 +12,7 @@
     {
       "id": "skill_sha256",
       "status": "pass",
-      "observed_at": "2026-10-31T12:51:42Z",
+      "observed_at": "2026-10-31T21:45:38Z",
       "evidence": {
         "file": "skill.md",
         "sha256": "8c208807e91955526e4f817084074bd3c7370ad76c8246a0a3f760614ebfc51b",
@@ -22,7 +22,7 @@
     {
       "id": "discovery.agent_registration_sha256",
       "status": "pass",
-      "observed_at": "2026-10-31T12:51:42Z",
+      "observed_at": "2026-10-31T21:45:38Z",
       "evidence": {
         "file": "discovery/agent-registration.json",
         "sha256": "873754792f0d5910afd7a9adc7f5501f29b9c7446f46040374b9f8c47bab2bec",
@@ -32,7 +32,7 @@
     {
       "id": "discovery.agent_card_sha256",
       "status": "pass",
-      "observed_at": "2026-10-31T12:51:42Z",
+      "observed_at": "2026-10-31T21:45:38Z",
       "evidence": {
         "file": "discovery/agent-card.json",
         "sha256": "5432c9474f615f9cf3553736821d59df937c3534e4b19d15b9ae60e2f5f3525c",
@@ -42,7 +42,7 @@
     {
       "id": "permissions_manifest",
       "status": "pass",
-      "observed_at": "2026-10-31T12:51:42Z",
+      "observed_at": "2026-10-31T21:45:38Z",
       "evidence": {
         "file": "permissions.json",
         "problems": [],
@@ -52,7 +52,7 @@
     {
       "id": "merkle_root_matches_index",
       "status": "pass",
-      "observed_at": "2026-10-31T12:51:42Z",
+      "observed_at": "2026-10-31T21:45:38Z",
       "evidence": {
         "state": "16c0c16db7484a0e036c2f7e9b51a62bbd76d63b2b93ecf2c830a0d4e8a9c405",
         "index": "16c0c16db7484a0e036c2f7e9b51a62bbd76d63b2b93ecf2c830a0d4e8a9c405"
@@ -61,7 +61,7 @@
     {
       "id": "http_probe.x402_manifest",
       "status": "pass",
-      "observed_at": "2026-10-31T12:51:42Z",
+      "observed_at": "2026-10-31T21:45:38Z",
       "evidence": {
         "url": "https://x402.thefirstwall.ai/.well-known/x402",
         "method": "GET",
@@ -74,7 +74,7 @@
     {
       "id": "http_probe.ledger_state",
       "status": "pass",
-      "observed_at": "2026-10-31T12:51:42Z",
+      "observed_at": "2026-10-31T21:45:38Z",
       "evidence": {
         "url": "https://thefirstwall.ai/state.json",
         "method": "GET",
@@ -90,12 +90,12 @@
     {
       "url": "https://x402.thefirstwall.ai/.well-known/x402",
       "status": "up",
-      "checked_at": "2026-10-31T12:51:42Z"
+      "checked_at": "2026-10-31T21:45:38Z"
     },
     {
       "url": "https://thefirstwall.ai/state.json",
       "status": "up",
-      "checked_at": "2026-10-31T12:51:42Z"
+      "checked_at": "2026-10-31T21:45:38Z"
     }
   ]
 }
