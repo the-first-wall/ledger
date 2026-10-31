@@ -8,14 +8,20 @@
       "fields": [
         "update_settlements[0].tx_hash"
       ],
-      "wallet_address": "0xE2C6bc227DE40561FE4a513e7FD05B3F7873c512"
+      "wallet_address": "0xE2C6bc227DE40561FE4a513e7FD05B3F7873c512",
+      "amount_usdc": 0.5,
+      "kind": "update",
+      "at": "2026-10-12T22:48:28Z"
     },
     "0x4fec06ff1292d560ccc5c298436ac07d4f172671046b0e73fde134e2279060b0": {
       "slot_id": "w1-b0002",
       "fields": [
         "update_settlements[1].tx_hash"
       ],
-      "wallet_address": "0xE2C6bc227DE40561FE4a513e7FD05B3F7873c512"
+      "wallet_address": "0xE2C6bc227DE40561FE4a513e7FD05B3F7873c512",
+      "amount_usdc": 0.5,
+      "kind": "update",
+      "at": "2026-10-20T19:17:10Z"
     },
     "0x6b88193d2409124393ddfcd8b9daa50deee9a053d6c6f03389e87b5104a6294c": {
       "slot_id": "w1-b0002",
@@ -23,21 +29,30 @@
         "base_tx_hash",
         "patron.tx_hash"
       ],
-      "wallet_address": "0xE2C6bc227DE40561FE4a513e7FD05B3F7873c512"
+      "wallet_address": "0xE2C6bc227DE40561FE4a513e7FD05B3F7873c512",
+      "amount_usdc": 1.0,
+      "kind": "inscription",
+      "at": "2026-10-08T17:00:00Z"
     },
     "0x743f8e7a9961e9c5ac9112468aae32538f3fe8c6e4c019da07bbcf6db3bfbd1a": {
       "slot_id": "w1-b0002",
       "fields": [
         "update_settlements[0].tx_hash"
       ],
-      "wallet_address": "0xE2C6bc227DE40561FE4a513e7FD05B3F7873c512"
+      "wallet_address": "0xE2C6bc227DE40561FE4a513e7FD05B3F7873c512",
+      "amount_usdc": 0.5,
+      "kind": "update",
+      "at": "2026-10-12T22:59:48Z"
     },
     "0x7652e3aab3cad1d449209b7b8fd9ebaa33bab61e24c7d921dff1bf67f56a69f6": {
       "slot_id": "w1-b0001",
       "fields": [
         "base_tx_hash"
       ],
-      "wallet_address": "0xE2C6bc227DE40561FE4a513e7FD05B3F7873c512"
+      "wallet_address": "0xE2C6bc227DE40561FE4a513e7FD05B3F7873c512",
+      "amount_usdc": 1.0,
+      "kind": "inscription",
+      "at": "2026-10-07T11:40:00Z"
     }
   }
 }
