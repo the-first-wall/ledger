@@ -278,7 +278,7 @@ INVARIANTS = [
     {
         "id": "published-provenance",
         "summary": "state.json publishes skill_sha256 / skill_version (sha256 of the committed skill.md) and "
-                   "discovery{agent_registration_sha256, agent_card_sha256} (the committed discovery/ "
+                   "discovery{agent_registration_sha256, agent_card_sha256, x402_manifest_sha256} (the committed discovery/ "
                    "documents); permissions.json lists exactly what the claim skill may do; an optional "
                    "skill.md.sig is a detached EIP-191 signature over thefirstwall.ai|skill|<sha256> "
                    "(absent = unsigned, a warning).",

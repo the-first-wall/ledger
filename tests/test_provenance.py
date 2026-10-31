@@ -45,7 +45,8 @@ def _key():
 class Sandbox(unittest.TestCase):
     """A copy of the publishable files (no slots) to tamper with."""
 
-    FILES = ["skill.md", "permissions.json", "discovery/agent-registration.json", "discovery/agent-card.json"]
+    FILES = ["skill.md", "permissions.json", "discovery/agent-registration.json", "discovery/agent-card.json",
+             "discovery/x402.json"]
 
     def setUp(self):
         self.td = tempfile.mkdtemp()
@@ -365,9 +366,9 @@ class PermissionsTests(unittest.TestCase):
 
 
 class DiscoveryTests(Sandbox):
-    def test_state_publishes_both_hashes(self):
+    def test_state_publishes_all_hashes(self):
         d = self.state()["discovery"]
-        self.assertEqual(set(d), {"agent_registration_sha256", "agent_card_sha256"})
+        self.assertEqual(set(d), {"agent_registration_sha256", "agent_card_sha256", "x402_manifest_sha256"})
         for key, rel in core.DISCOVERY_FILES.items():
             self.assertEqual(d[key], hashlib.sha256(open(os.path.join(REPO, rel), "rb").read()).hexdigest())
 
@@ -394,6 +395,28 @@ class DiscoveryTests(Sandbox):
         self.write("discovery/agent-card.json", b'{"name":"evil"}\n')
         with self.assertRaisesRegex(ValueError, "agent_card_sha256"):
             provenance.check_discovery(self.td, self.state())
+
+    def test_tampered_x402_manifest_fails(self):
+        path = os.path.join(self.td, "discovery", "x402.json")
+        with open(path, "rb") as fh:
+            data = bytearray(fh.read())
+        data[-2] ^= 0x01  # flip one bit inside the document
+        self.write("discovery/x402.json", bytes(data))
+        with self.assertRaises(ValueError):
+            provenance.check_discovery(self.td, self.state())
+
+    def test_x402_manifest_hash_is_pinned_to_the_worker_bytes(self):
+        pinned = "53d3120d465eb87ea7ed8863089e7d1ebb8b7923594e47d0c2c16a544fb2020b"
+        with open(os.path.join(REPO, "discovery", "x402.json"), "rb") as fh:
+            digest = hashlib.sha256(fh.read()).hexdigest()
+        self.assertEqual(digest, pinned)
+        self.assertEqual(load("state.json")["discovery"]["x402_manifest_sha256"], pinned)
+
+    def test_x402_manifest_shape(self):
+        doc = load("discovery/x402.json")
+        self.assertIsInstance(doc, dict)
+        self.assertEqual(doc["x402Version"], 2)
+        self.assertEqual(doc["kind"], "resource-server")
 
     def test_missing_or_non_json_fails(self):
         os.remove(os.path.join(self.td, "discovery", "agent-card.json"))
