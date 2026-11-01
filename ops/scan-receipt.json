@@ -1,14 +1,14 @@
 {
   "status": "no_transfers_in_window",
-  "from_block": 53351717,
-  "to_block": 53362800,
-  "target_block": 53362800,
-  "blocks_scanned": 11084,
+  "from_block": 53362801,
+  "to_block": 53375739,
+  "target_block": 53375739,
+  "blocks_scanned": 12939,
   "transfers_seen": 0,
   "candidates": [],
   "new_settlements": [],
   "errors": [],
-  "started_at": "2026-11-01T06:35:48Z",
-  "finished_at": "2026-11-01T06:35:55Z",
+  "started_at": "2026-11-01T13:47:05Z",
+  "finished_at": "2026-11-01T13:47:20Z",
   "state_root": "16c0c16db7484a0e036c2f7e9b51a62bbd76d63b2b93ecf2c830a0d4e8a9c405"
 }
