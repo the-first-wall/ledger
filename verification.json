@@ -2,7 +2,7 @@
   "schema": "thefirstwall.verification/1",
   "root": "16c0c16db7484a0e036c2f7e9b51a62bbd76d63b2b93ecf2c830a0d4e8a9c405",
   "as_of_block": 52868873,
-  "ledger_commit": "8bc2970165e6fd5e60d68cedea85cf4179bb4435",
+  "ledger_commit": "5f6effdfc52ff7dc02e31b149943abb5c0062126",
   "anchor": {
     "tx": "0xfd5dacf41cd11b54e3529fdda9ac1fa679ba8d0400019083ccc1b7b7b3eab2cb",
     "block": 52868873
@@ -12,7 +12,7 @@
     {
       "id": "skill_sha256",
       "status": "pass",
-      "observed_at": "2026-11-01T06:29:32Z",
+      "observed_at": "2026-11-01T10:40:37Z",
       "evidence": {
         "file": "skill.md",
         "sha256": "8c208807e91955526e4f817084074bd3c7370ad76c8246a0a3f760614ebfc51b",
@@ -22,7 +22,7 @@
     {
       "id": "discovery.agent_registration_sha256",
       "status": "pass",
-      "observed_at": "2026-11-01T06:29:32Z",
+      "observed_at": "2026-11-01T10:40:37Z",
       "evidence": {
         "file": "discovery/agent-registration.json",
         "sha256": "873754792f0d5910afd7a9adc7f5501f29b9c7446f46040374b9f8c47bab2bec",
@@ -32,7 +32,7 @@
     {
       "id": "discovery.agent_card_sha256",
       "status": "pass",
-      "observed_at": "2026-11-01T06:29:32Z",
+      "observed_at": "2026-11-01T10:40:37Z",
       "evidence": {
         "file": "discovery/agent-card.json",
         "sha256": "5432c9474f615f9cf3553736821d59df937c3534e4b19d15b9ae60e2f5f3525c",
@@ -40,9 +40,19 @@
       }
     },
     {
+      "id": "discovery.x402_manifest_sha256",
+      "status": "pass",
+      "observed_at": "2026-11-01T10:40:37Z",
+      "evidence": {
+        "file": "discovery/x402.json",
+        "sha256": "53d3120d465eb87ea7ed8863089e7d1ebb8b7923594e47d0c2c16a544fb2020b",
+        "published": "53d3120d465eb87ea7ed8863089e7d1ebb8b7923594e47d0c2c16a544fb2020b"
+      }
+    },
+    {
       "id": "permissions_manifest",
       "status": "pass",
-      "observed_at": "2026-11-01T06:29:32Z",
+      "observed_at": "2026-11-01T10:40:37Z",
       "evidence": {
         "file": "permissions.json",
         "problems": [],
@@ -52,7 +62,7 @@
     {
       "id": "merkle_root_matches_index",
       "status": "pass",
-      "observed_at": "2026-11-01T06:29:32Z",
+      "observed_at": "2026-11-01T10:40:37Z",
       "evidence": {
         "state": "16c0c16db7484a0e036c2f7e9b51a62bbd76d63b2b93ecf2c830a0d4e8a9c405",
         "index": "16c0c16db7484a0e036c2f7e9b51a62bbd76d63b2b93ecf2c830a0d4e8a9c405"
@@ -61,7 +71,7 @@
     {
       "id": "http_probe.x402_manifest",
       "status": "pass",
-      "observed_at": "2026-11-01T06:29:32Z",
+      "observed_at": "2026-11-01T10:40:37Z",
       "evidence": {
         "url": "https://x402.thefirstwall.ai/.well-known/x402",
         "method": "GET",
@@ -74,7 +84,7 @@
     {
       "id": "http_probe.ledger_state",
       "status": "pass",
-      "observed_at": "2026-11-01T06:29:32Z",
+      "observed_at": "2026-11-01T10:40:38Z",
       "evidence": {
         "url": "https://thefirstwall.ai/state.json",
         "method": "GET",
@@ -90,12 +100,12 @@
     {
       "url": "https://x402.thefirstwall.ai/.well-known/x402",
       "status": "up",
-      "checked_at": "2026-11-01T06:29:32Z"
+      "checked_at": "2026-11-01T10:40:37Z"
     },
     {
       "url": "https://thefirstwall.ai/state.json",
       "status": "up",
-      "checked_at": "2026-11-01T06:29:32Z"
+      "checked_at": "2026-11-01T10:40:38Z"
     }
   ]
 }

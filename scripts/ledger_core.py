@@ -643,6 +643,7 @@ SKILL_FILE = "skill.md"
 DISCOVERY_FILES = {
     "agent_registration_sha256": os.path.join("discovery", "agent-registration.json"),
     "agent_card_sha256": os.path.join("discovery", "agent-card.json"),
+    "x402_manifest_sha256": os.path.join("discovery", "x402.json"),
 }
 _SKILL_VERSION_RE = re.compile(r"\A---\r?\n(.*?)\r?\n---\r?\n", re.S)
 
