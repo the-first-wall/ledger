@@ -704,7 +704,8 @@ def build_state(base_dir: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     unsold = unsold_slots(claimed_numbers)
     # Only the reserved blocks that are still free are published: a reader that
     # skips `reserved_slots` must never skip a block that is already inscribed.
-    reserved_unclaimed = [slot_id_for(n) for n in RESERVED_SLOT_NUMBERS if n not in claimed_numbers]
+    reserved_unclaimed_numbers = [n for n in RESERVED_SLOT_NUMBERS if n not in claimed_numbers]
+    reserved_unclaimed = [slot_id_for(n) for n in reserved_unclaimed_numbers]
 
     leaves = compute_leaves(slot_dir, slots)
     root = merkle_tree_hash([h for _, h in leaves]).hex()
@@ -717,7 +718,11 @@ def build_state(base_dir: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         "next_available_slot": slot_id_for(next_num) if next_num <= MAX_SLOT else None,
         "unsold_slots": unsold,
         "reserved_slots": reserved_unclaimed,
-        "reserved_slot_range": [min(RESERVED_SLOT_NUMBERS), max(RESERVED_SLOT_NUMBERS)],
+        # The range spans the *unclaimed* reserved blocks, so it can never disagree
+        # with the list ((D-27: it once included #0002, already inscribed, and read
+        # [2, 10] against an eight-slot list). None when none are left.
+        "reserved_slot_range": ([min(reserved_unclaimed_numbers), max(reserved_unclaimed_numbers)]
+                                if reserved_unclaimed_numbers else None),
         "founder_slot_range": [min(FOUNDER_SLOT_NUMBERS), max(FOUNDER_SLOT_NUMBERS)],
         "current_floor_usdc": tier["price_usdc"],
         "update_price_usdc": UPDATE_PRICE_USDC,

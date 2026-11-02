@@ -232,7 +232,9 @@ class LedgerCoreTests(unittest.TestCase):
         self.assertEqual(state["reserved_slots"],
                          [s for s in core.RESERVED_SLOTS if s not in claimed])
         self.assertNotIn("w1-b0002", state["reserved_slots"])
-        self.assertEqual(state["reserved_slot_range"], [2, 10])
+        # The range spans the *unclaimed* reserved blocks (D-27): #0002 is
+        # inscribed, so the free reserved blocks are #0003–#0010.
+        self.assertEqual(state["reserved_slot_range"], [3, 10])
 
     def test_settlements_index_is_deterministic_and_conflict_free(self):
         a, conflicts = core.build_settlements(REPO)
