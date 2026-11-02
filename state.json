@@ -19,7 +19,7 @@
     "w1-b0010"
   ],
   "reserved_slot_range": [
-    2,
+    3,
     10
   ],
   "founder_slot_range": [
