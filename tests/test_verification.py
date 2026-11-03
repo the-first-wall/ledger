@@ -74,22 +74,40 @@ class OfflineBuild(unittest.TestCase):
         self.assertTrue(all(c["status"] == "pass" for c in a["checks"]), a["checks"])
         self.assertFalse(any(c["id"].startswith("http_probe.") for c in a["checks"]))
 
-    def test_probe_uses_a_real_get_and_stamps_it(self):
-        calls = []
-
+    def _manifest_fetch(self, manifest):
+        """A fake GET: the x402 URL serves `manifest`, the state URL serves the repo root."""
         def fetch(url):
-            calls.append(url)
             if "x402" in url:
-                body = b'{"x402Version": 2}'
+                body = json.dumps(manifest).encode()
             else:
                 body = json.dumps({"merkle_root": json.loads(_read("state.json"))["merkle_root"]}).encode()
             return {"http_status": 200, "sha256": "a" * 64, "bytes": len(body), "body": body}
+        return fetch
+
+    def test_probe_uses_a_real_get_and_stamps_it(self):
+        calls = []
+        base = self._manifest_fetch(json.loads(_read("discovery/x402.json")))
+
+        def fetch(url):
+            calls.append(url)
+            return base(url)
 
         doc = ver.build(REPO, probe=True, fetch=fetch, clock=CLOCK, commit="y" * 40)
         self.assertEqual(sorted(calls), sorted(u for _, u in ver.SERVICES))
         probes = {c["id"]: c for c in doc["checks"] if c["id"].startswith("http_probe.")}
         self.assertEqual({c["status"] for c in probes.values()}, {"pass"})
+        self.assertEqual(probes["http_probe.x402_manifest"]["evidence"]["semantics"], "pass")
         self.assertTrue(all(s["status"] == "up" and s["checked_at"] == CLOCK() for s in doc["services"]))
+
+    def test_x402_probe_fails_on_a_drifted_payee(self):
+        """B-40: a semantic check that can fail for a real reason — a shifted payTo."""
+        bad = json.loads(_read("discovery/x402.json"))
+        bad["resources"][0]["payTo"] = "0x" + "0" * 40
+        doc = ver.build(REPO, probe=True, fetch=self._manifest_fetch(bad), clock=CLOCK, commit="y" * 40)
+        probe = next(c for c in doc["checks"] if c["id"] == "http_probe.x402_manifest")
+        self.assertEqual(probe["status"], "fail")
+        self.assertEqual(probe["evidence"]["semantics"], "fail")
+        self.assertIn("payTo", " ".join(probe["evidence"]["problems"]))
 
     def test_failed_probe_is_recorded_as_down(self):
         doc = ver.build(REPO, probe=True, fetch=lambda u: {"error": "URLError: down"}, clock=CLOCK, commit="z" * 40)
