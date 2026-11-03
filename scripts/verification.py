@@ -120,8 +120,58 @@ def file_checks(base_dir: str, state: Dict[str, Any], observed_at: str) -> List[
     return out
 
 
-def probe_checks(state: Dict[str, Any], fetch: Fetch, clock: Callable[[], str]):
-    """Live probes: real GETs. Returns (checks, services)."""
+def _x402_manifest_semantics(doc: Any, state: Dict[str, Any], authored: Dict[str, Any]) -> List[str]:
+    """The served x402 manifest is built at runtime, so its bytes never pin (B-40).
+    Assert the fields that matter against the ledger's settlement rail and the
+    authored discovery file; a drifted payee, asset or url is the failure to catch."""
+    if not isinstance(doc, dict):
+        return ["served manifest is not a JSON object"]
+    rail = state.get("settlement_rail") or {}
+
+    def pick(d: Any, *path: str):
+        cur = d
+        for k in path:
+            if not isinstance(cur, dict):
+                return None
+            cur = cur.get(k)
+        return cur
+
+    a_res = authored.get("resources") if isinstance(authored, dict) else None
+    a0 = a_res[0] if isinstance(a_res, list) and a_res and isinstance(a_res[0], dict) else {}
+    s_res = doc.get("resources")
+    s0 = s_res[0] if isinstance(s_res, list) and s_res and isinstance(s_res[0], dict) else {}
+
+    expected = {
+        "x402Version": authored.get("x402Version") if isinstance(authored, dict) else None,
+        "resources[0].url": a0.get("url"),
+        "resources[0].network": a0.get("network"),
+        "resources[0].payTo": rail.get("pay_to"),
+        "resources[0].asset.address": rail.get("contract"),
+    }
+    served = {
+        "x402Version": doc.get("x402Version"),
+        "resources[0].url": s0.get("url"),
+        "resources[0].network": s0.get("network"),
+        "resources[0].payTo": s0.get("payTo"),
+        "resources[0].asset.address": pick(s0, "asset", "address"),
+    }
+    problems = [f"{k}: served {served[k]!r} != expected {exp!r}"
+                for k, exp in expected.items() if exp is not None and served[k] != exp]
+    a_ext = authored.get("extensions") if isinstance(authored, dict) else None
+    s_ext = doc.get("extensions")
+    a_keys = sorted(a_ext) if isinstance(a_ext, dict) else []
+    s_keys = sorted(s_ext) if isinstance(s_ext, dict) else []
+    if a_keys != s_keys:
+        problems.append(f"extensions keys: served {s_keys} != expected {a_keys}")
+    return problems
+
+
+def probe_checks(state: Dict[str, Any], fetch: Fetch, clock: Callable[[], str],
+                 authored: Optional[Dict[str, Any]] = None):
+    """Live probes: real GETs. Returns (checks, services).
+
+    `authored` is the committed `discovery/x402.json`: the served x402 manifest is
+    built at runtime, so it is checked by *meaning*, never by a byte-pin (B-40)."""
     checks, services = [], []
     for sid, url in SERVICES:
         at = clock()
@@ -129,7 +179,11 @@ def probe_checks(state: Dict[str, Any], fetch: Fetch, clock: Callable[[], str]):
         status_code = r.get("http_status")
         ok = status_code == 200 and "error" not in r
         evidence: Dict[str, Any] = {"url": url, "method": "GET", "http_status": status_code,
-                                    "sha256": r.get("sha256"), "bytes": r.get("bytes")}
+                                    "bytes": r.get("bytes")}
+        if r.get("sha256"):
+            # The bytes actually served. For the runtime-built manifest this is NOT a
+            # pin — the semantics check below is what can fail for a real reason.
+            evidence["served_body_sha256"] = r["sha256"]
         if r.get("error"):
             evidence["error"] = r["error"]
         if ok:
@@ -139,8 +193,12 @@ def probe_checks(state: Dict[str, Any], fetch: Fetch, clock: Callable[[], str]):
                 doc, ok = None, False
                 evidence["error"] = "response is not JSON"
             if ok and sid == "x402_manifest":
-                ok = isinstance(doc, dict) and doc.get("x402Version") is not None
+                problems = _x402_manifest_semantics(doc, state, authored or {})
                 evidence["x402Version"] = doc.get("x402Version") if isinstance(doc, dict) else None
+                evidence["semantics"] = "pass" if not problems else "fail"
+                if problems:
+                    evidence["problems"] = problems
+                ok = not problems
             if ok and sid == "ledger_state":
                 live = doc.get("merkle_root") if isinstance(doc, dict) else None
                 evidence["live_merkle_root"] = live
@@ -159,7 +217,8 @@ def build(base_dir: str = BASE_DIR, *, probe: bool = False, fetch: Fetch = http_
     last = anchors[-1] if isinstance(anchors, list) and anchors else {}
     checks = file_checks(base_dir, state, clock())
     if probe:
-        pchecks, services = probe_checks(state, fetch, clock)
+        authored = _load(base_dir, core.DISCOVERY_FILES["x402_manifest_sha256"])
+        pchecks, services = probe_checks(state, fetch, clock, authored)
         checks += pchecks
     else:
         services = [{"url": url, "status": "unprobed", "checked_at": None} for _, url in SERVICES]
