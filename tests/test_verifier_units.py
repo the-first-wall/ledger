@@ -209,6 +209,53 @@ class SoulManifestTests(unittest.TestCase):
             verifier.verify_soul_manifest(d, REPO)
 
 
+class SealedVaultTests(unittest.TestCase):
+    """B-45: an advertised sealed vault must exist and digest to ciphertext_sha256."""
+
+    def _dossier(self, rel, digest):
+        d = valid_dossier()
+        d["sealed_vault"] = {"status": "SEALED", "protocol": "p",
+                             "ciphertext_rel_path": rel, "ciphertext_sha256": digest}
+        return d
+
+    def test_matching_vault_passes(self):
+        with tempfile.TemporaryDirectory() as root:
+            os.makedirs(os.path.join(root, "vaults"))
+            payload = b"age-encryption.org/v1/tlock\n..."
+            with open(os.path.join(root, "vaults", "w1-b0002.tlock.age"), "wb") as fh:
+                fh.write(payload)
+            d = self._dossier("vaults/w1-b0002.tlock.age", hashlib.sha256(payload).hexdigest())
+            verifier.verify_sealed_vault(d, root)  # must not raise
+
+    def test_missing_vault_rejected(self):
+        d = self._dossier("vaults/w1-b0002.tlock.age", "a" * 64)
+        with self.assertRaises(ValueError) as ctx:
+            verifier.verify_sealed_vault(d, REPO)
+        self.assertIn("no such file", str(ctx.exception))
+
+    def test_digest_mismatch_rejected(self):
+        with tempfile.TemporaryDirectory() as root:
+            os.makedirs(os.path.join(root, "vaults"))
+            with open(os.path.join(root, "vaults", "w1-b0002.tlock.age"), "wb") as fh:
+                fh.write(b"real bytes")
+            d = self._dossier("vaults/w1-b0002.tlock.age", "a" * 64)
+            with self.assertRaises(ValueError) as ctx:
+                verifier.verify_sealed_vault(d, root)
+            self.assertIn("mismatch", str(ctx.exception))
+
+    def test_ledger_prefixed_path_rejected(self):
+        d = self._dossier("ledger/vaults/w1-b0002.tlock.age", "a" * 64)
+        with self.assertRaises(ValueError) as ctx:
+            verifier.verify_sealed_vault(d, REPO)
+        self.assertIn("repo-relative", str(ctx.exception))
+
+    def test_the_committed_genesis_vault_matches(self):
+        """The real w1-b0001 dossier's advertised vault exists and digests as claimed."""
+        with open(os.path.join(REPO, "ledger", "w1", "w1-b0001.json"), encoding="utf-8") as fh:
+            dossier = json.load(fh)
+        verifier.verify_sealed_vault(dossier, REPO)  # must not raise
+
+
 class LedgerCoreTests(unittest.TestCase):
 
     def test_build_state_is_deterministic(self):
