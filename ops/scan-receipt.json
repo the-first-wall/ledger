@@ -1,14 +1,30 @@
 {
-  "status": "no_transfers_in_window",
-  "from_block": 53495754,
-  "to_block": 53510191,
-  "target_block": 53510191,
-  "blocks_scanned": 14438,
-  "transfers_seen": 0,
-  "candidates": [],
-  "new_settlements": [],
+  "status": "transfers_found",
+  "from_block": 53510192,
+  "to_block": 53520278,
+  "target_block": 53520278,
+  "blocks_scanned": 10087,
+  "transfers_seen": 1,
+  "candidates": [
+    {
+      "tx_hash": "0xadd412074450685119d854e5fb0300242977a1ce102ca8068b06851a20f1f72b",
+      "from": "0xe2c6bc227de40561fe4a513e7fd05b3f7873c512",
+      "to": "0xbbF4D6B954e97C2C4fbC4e89B7933cDD7e4D9f23",
+      "amount_usdc": 1.0,
+      "block": 53517691
+    }
+  ],
+  "new_settlements": [
+    {
+      "tx_hash": "0xadd412074450685119d854e5fb0300242977a1ce102ca8068b06851a20f1f72b",
+      "from": "0xe2c6bc227de40561fe4a513e7fd05b3f7873c512",
+      "to": "0xbbF4D6B954e97C2C4fbC4e89B7933cDD7e4D9f23",
+      "amount_usdc": 1.0,
+      "block": 53517691
+    }
+  ],
   "errors": [],
-  "started_at": "2026-11-04T16:28:49Z",
-  "finished_at": "2026-11-04T16:29:01Z",
+  "started_at": "2026-11-04T22:05:03Z",
+  "finished_at": "2026-11-04T22:05:12Z",
   "state_root": "16c0c16db7484a0e036c2f7e9b51a62bbd76d63b2b93ecf2c830a0d4e8a9c405"
 }
