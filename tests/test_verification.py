@@ -74,19 +74,64 @@ class OfflineBuild(unittest.TestCase):
         self.assertTrue(all(c["status"] == "pass" for c in a["checks"]), a["checks"])
         self.assertFalse(any(c["id"].startswith("http_probe.") for c in a["checks"]))
 
-    def _manifest_fetch(self, manifest):
-        """A fake GET: the x402 URL serves `manifest`, the state URL serves the repo root."""
+    def _served_manifest(self, mutate=None):
+        """The served /.well-known/x402 manifest: the authored discovery document,
+        which the worker serves verbatim (static by design; it carries no price).
+        `mutate` edits the copy before it is served."""
+        doc = json.loads(_read("discovery/x402.json"))
+        if mutate:
+            mutate(doc)
+        return doc
+
+    def _money_block(self, doc, amount_usdc=1.0, units="1000000"):
+        """Add the runtime `price`/`accepts` a manifest *may* carry (the worker's
+        older shape), so the conditional money check can be exercised."""
+        state = json.loads(_read("state.json"))
+        rail = state["settlement_rail"]
+        r0 = doc["resources"][0]
+        r0["price"] = {"amount_usdc": amount_usdc, "pricing_tier": state["pricing_tier"],
+                       "source": "https://thefirstwall.ai/state.json"}
+        r0["accepts"] = [{"scheme": "exact", "network": "eip155:8453", "amount": units,
+                          "asset": rail["contract"], "payTo": rail["pay_to"]}]
+        return doc
+
+    def _claim_body(self, mutate=None):
+        """The live /claim 402 PaymentRequired body the worker builds."""
+        state = json.loads(_read("state.json"))
+        rail = state["settlement_rail"]
+        units = str(int(round(state["current_floor_usdc"] * 10 ** 6)))
+        body = {
+            "x402Version": 2,
+            "error": "Payment Required",
+            "resource": {"url": "https://x402.thefirstwall.ai/claim"},
+            "accepts": [{"scheme": "exact", "network": "eip155:8453", "amount": units,
+                         "asset": rail["contract"], "payTo": rail["pay_to"]}],
+            "extensions": {"bazaar": {}},
+        }
+        if mutate:
+            mutate(body)
+        return body
+
+    def _manifest_fetch(self, manifest, claim=None):
+        """A fake GET: the manifest URL serves `manifest` (200), the claim URL serves
+        a 402 PaymentRequired body, the state URL serves the repo root (200)."""
+        if claim is None:
+            claim = self._claim_body()
+
         def fetch(url):
-            if "x402" in url:
-                body = json.dumps(manifest).encode()
+            if url.endswith("/claim"):
+                body, status = json.dumps(claim).encode(), 402
+            elif "x402" in url:
+                body, status = json.dumps(manifest).encode(), 200
             else:
                 body = json.dumps({"merkle_root": json.loads(_read("state.json"))["merkle_root"]}).encode()
-            return {"http_status": 200, "sha256": "a" * 64, "bytes": len(body), "body": body}
+                status = 200
+            return {"http_status": status, "sha256": "a" * 64, "bytes": len(body), "body": body}
         return fetch
 
     def test_probe_uses_a_real_get_and_stamps_it(self):
         calls = []
-        base = self._manifest_fetch(json.loads(_read("discovery/x402.json")))
+        base = self._manifest_fetch(self._served_manifest())
 
         def fetch(url):
             calls.append(url)
@@ -97,17 +142,58 @@ class OfflineBuild(unittest.TestCase):
         probes = {c["id"]: c for c in doc["checks"] if c["id"].startswith("http_probe.")}
         self.assertEqual({c["status"] for c in probes.values()}, {"pass"})
         self.assertEqual(probes["http_probe.x402_manifest"]["evidence"]["semantics"], "pass")
+        self.assertEqual(probes["http_probe.x402_claim"]["evidence"]["semantics"], "pass")
+        self.assertEqual(probes["http_probe.x402_claim"]["evidence"]["http_status"], 402)
         self.assertTrue(all(s["status"] == "up" and s["checked_at"] == CLOCK() for s in doc["services"]))
 
     def test_x402_probe_fails_on_a_drifted_payee(self):
         """B-40: a semantic check that can fail for a real reason — a shifted payTo."""
-        bad = json.loads(_read("discovery/x402.json"))
-        bad["resources"][0]["payTo"] = "0x" + "0" * 40
+        bad = self._served_manifest(lambda d: d["resources"][0].__setitem__("payTo", "0x" + "0" * 40))
         doc = ver.build(REPO, probe=True, fetch=self._manifest_fetch(bad), clock=CLOCK, commit="y" * 40)
         probe = next(c for c in doc["checks"] if c["id"] == "http_probe.x402_manifest")
         self.assertEqual(probe["status"], "fail")
         self.assertEqual(probe["evidence"]["semantics"], "fail")
         self.assertIn("payTo", " ".join(probe["evidence"]["problems"]))
+
+    def test_manifest_money_is_checked_when_present(self):
+        """B-44: if the served manifest carries price/accepts, a 999.999999 USDC
+        quote must fail against the ledger floor (it used to pass)."""
+        def inflate(d):
+            self._money_block(d, amount_usdc=99, units="999999999")
+        doc = ver.build(REPO, probe=True,
+                        fetch=self._manifest_fetch(self._served_manifest(inflate)),
+                        clock=CLOCK, commit="y" * 40)
+        probe = next(c for c in doc["checks"] if c["id"] == "http_probe.x402_manifest")
+        self.assertEqual(probe["status"], "fail")
+        joined = " ".join(probe["evidence"]["problems"])
+        self.assertIn("amount", joined)
+        self.assertIn("amount_usdc", joined)
+
+    def test_manifest_without_price_still_passes(self):
+        """The static 200 manifest carries no price by design; that is not a failure."""
+        doc = ver.build(REPO, probe=True, fetch=self._manifest_fetch(self._served_manifest()),
+                        clock=CLOCK, commit="y" * 40)
+        probe = next(c for c in doc["checks"] if c["id"] == "http_probe.x402_manifest")
+        self.assertEqual(probe["status"], "pass")
+        self.assertEqual(probe["evidence"]["semantics"], "pass")
+
+    def test_claim_probe_reads_the_live_402_and_checks_the_price(self):
+        """B-44: the live /claim 402 body is probed; a quietly inflated price fails."""
+        good = ver.build(REPO, probe=True, fetch=self._manifest_fetch(self._served_manifest()),
+                         clock=CLOCK, commit="y" * 40)
+        probe = next(c for c in good["checks"] if c["id"] == "http_probe.x402_claim")
+        self.assertEqual(probe["status"], "pass")
+        self.assertEqual(probe["evidence"]["http_status"], 402)
+        self.assertEqual(probe["evidence"]["expected_status"], 402)
+        self.assertEqual(probe["evidence"]["quoted_amount"], probe["evidence"]["expected_amount"])
+
+        inflated = self._claim_body(lambda b: b["accepts"][0].__setitem__("amount", "999999999"))
+        bad = ver.build(REPO, probe=True, fetch=self._manifest_fetch(self._served_manifest(), claim=inflated),
+                        clock=CLOCK, commit="y" * 40)
+        probe = next(c for c in bad["checks"] if c["id"] == "http_probe.x402_claim")
+        self.assertEqual(probe["status"], "fail")
+        self.assertEqual(probe["evidence"]["semantics"], "fail")
+        self.assertIn("amount", " ".join(probe["evidence"]["problems"]))
 
     def test_failed_probe_is_recorded_as_down(self):
         doc = ver.build(REPO, probe=True, fetch=lambda u: {"error": "URLError: down"}, clock=CLOCK, commit="z" * 40)

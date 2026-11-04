@@ -1238,6 +1238,37 @@ def verify_soul_manifest(dossier: dict, ledger_root: str):
     print(f"  [✓] Soul manifest verified ({rel} -> {digest[:16]}…).")
 
 
+def verify_sealed_vault(dossier: dict, repo_root: str) -> str:
+    """A sealed vault the record advertises must exist and digest to
+    `ciphertext_sha256` (B-45). The digest is committed by the record — and so by
+    the Merkle root — but the file it names was never re-derived, so an advertised
+    vault could 404 or drift with nothing to catch it. The path is repo-root
+    relative (`vaults/…`, not the `ledger/vaults/…` the record once described)."""
+    vault = dossier.get("sealed_vault")
+    if not isinstance(vault, dict):
+        raise ValueError("sealed_vault must be an object when present.")
+    rel = vault.get("ciphertext_rel_path")
+    if not isinstance(rel, str) or not rel:
+        raise ValueError("sealed_vault.ciphertext_rel_path is missing.")
+    slot_id = str(dossier.get("slot_id") or "")
+    if not rel.startswith("vaults/") or os.path.basename(rel) != f"{slot_id}.tlock.age":
+        raise ValueError(
+            f"sealed_vault.ciphertext_rel_path {rel!r} must be the repo-relative "
+            f"'vaults/{slot_id}.tlock.age' (not a 'ledger/vaults/…' path)."
+        )
+    path = os.path.join(repo_root, rel)
+    if not os.path.exists(path):
+        raise ValueError(f"sealed_vault advertises '{rel}' but no such file exists in the ledger.")
+    with open(path, "rb") as fh:
+        digest = hashlib.sha256(fh.read()).hexdigest()
+    if digest != vault.get("ciphertext_sha256"):
+        raise ValueError(
+            f"sealed_vault.ciphertext_sha256 mismatch for {rel}: dossier says "
+            f"{vault.get('ciphertext_sha256')} but the file digests to {digest}."
+        )
+    return f"{rel} -> {digest[:16]}…"
+
+
 # Keys a soul manifest must never carry: they describe the machine, not the agent.
 _MANIFEST_MACHINE_KEYS = {"host", "hostname", "path", "cwd", "home", "ip", "pid", "user"}
 
@@ -2267,6 +2298,9 @@ def run_verification(base_dir: str, *, skip_rpc: bool = False, rpc_scope: str = 
                   lambda s=slot_id, d=data: verify_price_ladder(s, d))
         log.guard(slot_id + ".soul_manifest",
                   lambda d=data: verify_soul_manifest(d, ledger_root))
+        if isinstance(data.get("sealed_vault"), dict):
+            log.guard(slot_id + ".sealed_vault",
+                      lambda d=data: verify_sealed_vault(d, base_dir))
         manifest = _load_manifest(ledger_root, data)
         try:
             log.record(slot_id + ".soul_manifest_hygiene", "PASS", soul_manifest_hygiene(manifest))

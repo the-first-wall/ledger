@@ -17,8 +17,9 @@ when, so an agent need not take liveness on faith:
 Two kinds of checks, never mixed up:
   * file-hash assertions — pure functions of the committed bytes (skill.md,
     the discovery documents, permissions.json, the Merkle root). Offline.
-  * live probes — a real HTTP GET with a timestamp (x402 manifest, state.json
-    on the canonical site). Run ONLY with --probe, by its own scheduled workflow
+  * live probes — a real HTTP GET with a timestamp (the x402 manifest, state.json
+    on the canonical site, and the live `/claim` 402 body — the price a buyer is
+    actually quoted, B-44). Run ONLY with --probe, by its own scheduled workflow
     (.github/workflows/verification_probe.yml), never by unit tests or `--check`.
     Without --probe the services are listed with status "unprobed".
 
@@ -38,6 +39,7 @@ import os
 import re
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
@@ -52,7 +54,15 @@ SCHEMA = "thefirstwall.verification/1"
 SERVICES = (
     ("x402_manifest", "https://x402.thefirstwall.ai/.well-known/x402"),
     ("ledger_state", "https://thefirstwall.ai/state.json"),
+    ("x402_claim", "https://x402.thefirstwall.ai/claim"),
 )
+# The HTTP status each probe must see. The claim endpoint answers 402 by design —
+# that body *is* the price a buyer is quoted, so a 200 there is itself a defect (B-44).
+EXPECTED_STATUS = {"x402_manifest": 200, "ledger_state": 200, "x402_claim": 402}
+CLAIM_URL = "https://x402.thefirstwall.ai/claim"
+# The extensions the /claim 402 challenge must carry (the Bazaar listing block).
+CLAIM_EXTENSION_KEYS = ("bazaar",)
+USDC_DECIMALS = 6
 TOP_KEYS = {"schema", "root", "as_of_block", "ledger_commit", "anchor", "slots", "checks", "services"}
 STATUSES = {"pass", "fail", "unprobed"}
 _TS = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
@@ -73,6 +83,16 @@ def http_get(url: str, timeout: float = 20.0) -> Dict[str, Any]:
             body = resp.read()
             return {"http_status": resp.status, "sha256": hashlib.sha256(body).hexdigest(),
                     "bytes": len(body), "body": body}
+    except urllib.error.HTTPError as e:
+        # A real answer with a non-2xx status. The body is the evidence: the
+        # /claim endpoint answers 402 by design, and that 402 body is the price
+        # the buyer is actually quoted (B-44). Read it instead of raising.
+        try:
+            body = e.read()
+        except Exception:  # noqa: BLE001
+            body = b""
+        return {"http_status": e.code, "sha256": hashlib.sha256(body).hexdigest(),
+                "bytes": len(body), "body": body}
     except Exception as e:  # noqa: BLE001 — a failed probe is evidence, not a crash
         return {"error": f"{type(e).__name__}: {e}"}
 
@@ -120,10 +140,70 @@ def file_checks(base_dir: str, state: Dict[str, Any], observed_at: str) -> List[
     return out
 
 
+def _expected_units(state: Dict[str, Any]) -> Optional[int]:
+    """The ledger floor in USDC base units (6 decimals), or None when state.json
+    carries no usable floor. The one number a buyer pays; never a guess."""
+    floor = state.get("current_floor_usdc")
+    if isinstance(floor, bool) or not isinstance(floor, (int, float)) or floor <= 0:
+        return None
+    return int(round(float(floor) * 10 ** USDC_DECIMALS))
+
+
+def _accepts_problems(accepts: Any, state: Dict[str, Any], label: str,
+                      required: bool = True) -> List[str]:
+    """An `accepts[0]` block must quote exactly the ledger floor and the ledger's
+    settlement rail. This is the money check B-44 was missing: a 999.999999 USDC
+    quote used to pass because only identity fields were compared. `required` is
+    False for the static 200 manifest, which by design carries no price."""
+    rail = state.get("settlement_rail") or {}
+    if not isinstance(accepts, list) or not accepts or not isinstance(accepts[0], dict):
+        return [f"{label}: accepts[0] is missing (no price a buyer can pay)"] if required else []
+    a0 = accepts[0]
+    problems: List[str] = []
+    units = _expected_units(state)
+    raw = a0.get("amount")
+    try:
+        got = int(str(raw))
+    except (TypeError, ValueError):
+        got = None
+    if units is None:
+        problems.append(f"{label}: state.json has no usable current_floor_usdc")
+    elif got != units:
+        problems.append(f"{label}: accepts[0].amount {raw!r} != the ledger floor "
+                        f"{units} units ({state.get('current_floor_usdc')} USDC)")
+    chain_id = rail.get("chain_id")
+    if chain_id is not None and a0.get("network") != f"eip155:{chain_id}":
+        problems.append(f"{label}: accepts[0].network {a0.get('network')!r} != eip155:{chain_id}")
+    if rail.get("pay_to") is not None and a0.get("payTo") != rail.get("pay_to"):
+        problems.append(f"{label}: accepts[0].payTo {a0.get('payTo')!r} != {rail.get('pay_to')!r}")
+    if rail.get("contract") is not None and a0.get("asset") != rail.get("contract"):
+        problems.append(f"{label}: accepts[0].asset {a0.get('asset')!r} != {rail.get('contract')!r}")
+    return problems
+
+
+def _price_problems(price: Any, state: Dict[str, Any], label: str,
+                    required: bool = False) -> List[str]:
+    """A served `price` block must name the ledger floor and the active tier. The
+    static 200 manifest carries none by design, so absence is only a failure where
+    a price is required (the 402 challenge)."""
+    if not isinstance(price, dict):
+        return [f"{label}: price is missing (the served manifest must publish the floor)"] if required else []
+    problems: List[str] = []
+    floor = state.get("current_floor_usdc")
+    if price.get("amount_usdc") != floor:
+        problems.append(f"{label}: price.amount_usdc {price.get('amount_usdc')!r} != the ledger floor {floor!r}")
+    tier = state.get("pricing_tier")
+    if tier is not None and price.get("pricing_tier") != tier:
+        problems.append(f"{label}: price.pricing_tier {price.get('pricing_tier')!r} != {tier!r}")
+    return problems
+
+
 def _x402_manifest_semantics(doc: Any, state: Dict[str, Any], authored: Dict[str, Any]) -> List[str]:
     """The served x402 manifest is built at runtime, so its bytes never pin (B-40).
     Assert the fields that matter against the ledger's settlement rail and the
-    authored discovery file; a drifted payee, asset or url is the failure to catch."""
+    authored discovery file; a drifted payee, asset or url is the failure to catch.
+    The money fields (`price`, `accepts[0].amount`) are checked against the ledger
+    floor too — identity without the price is a green tick that cannot see (B-44)."""
     if not isinstance(doc, dict):
         return ["served manifest is not a JSON object"]
     rail = state.get("settlement_rail") or {}
@@ -163,6 +243,30 @@ def _x402_manifest_semantics(doc: Any, state: Dict[str, Any], authored: Dict[str
     s_keys = sorted(s_ext) if isinstance(s_ext, dict) else []
     if a_keys != s_keys:
         problems.append(f"extensions keys: served {s_keys} != expected {a_keys}")
+    # The money: if the served manifest carries `price`/`accepts`, they must quote
+    # the ledger floor and the rail. The static 200 manifest carries neither by
+    # design (the price lives in the /claim 402 body), so absence is not a failure
+    # here — a present-and-wrong price is (B-44).
+    problems += _price_problems(s0.get("price"), state, "manifest", required=False)
+    problems += _accepts_problems(s0.get("accepts"), state, "manifest", required=False)
+    return problems
+
+
+def _x402_claim_semantics(doc: Any, state: Dict[str, Any]) -> List[str]:
+    """The live `/claim` 402 body is the price a buyer is actually quoted. Probe it
+    (B-44): a seller can quietly inflate the price in the 402 challenge while the
+    static manifest stays honest, and the old check never looked."""
+    if not isinstance(doc, dict):
+        return ["402 body is not a JSON object"]
+    problems = _accepts_problems(doc.get("accepts"), state, "402")
+    res = doc.get("resource")
+    url = res.get("url") if isinstance(res, dict) else None
+    if url != CLAIM_URL:
+        problems.append(f"402: resource.url {url!r} != {CLAIM_URL!r}")
+    ext = doc.get("extensions")
+    keys = sorted(ext) if isinstance(ext, dict) else []
+    if keys != sorted(CLAIM_EXTENSION_KEYS):
+        problems.append(f"402: extensions keys {keys} != {sorted(CLAIM_EXTENSION_KEYS)}")
     return problems
 
 
@@ -171,15 +275,18 @@ def probe_checks(state: Dict[str, Any], fetch: Fetch, clock: Callable[[], str],
     """Live probes: real GETs. Returns (checks, services).
 
     `authored` is the committed `discovery/x402.json`: the served x402 manifest is
-    built at runtime, so it is checked by *meaning*, never by a byte-pin (B-40)."""
+    built at runtime, so it is checked by *meaning*, never by a byte-pin (B-40).
+    The `/claim` probe is read-only and bounded (one GET, 20s timeout): it must
+    see 402, and the 402 body must quote the ledger floor (B-44)."""
     checks, services = [], []
     for sid, url in SERVICES:
         at = clock()
         r = fetch(url)
         status_code = r.get("http_status")
-        ok = status_code == 200 and "error" not in r
+        want = EXPECTED_STATUS.get(sid, 200)
+        ok = status_code == want and "error" not in r
         evidence: Dict[str, Any] = {"url": url, "method": "GET", "http_status": status_code,
-                                    "bytes": r.get("bytes")}
+                                    "expected_status": want, "bytes": r.get("bytes")}
         if r.get("sha256"):
             # The bytes actually served. For the runtime-built manifest this is NOT a
             # pin — the semantics check below is what can fail for a real reason.
@@ -195,6 +302,18 @@ def probe_checks(state: Dict[str, Any], fetch: Fetch, clock: Callable[[], str],
             if ok and sid == "x402_manifest":
                 problems = _x402_manifest_semantics(doc, state, authored or {})
                 evidence["x402Version"] = doc.get("x402Version") if isinstance(doc, dict) else None
+                evidence["semantics"] = "pass" if not problems else "fail"
+                if problems:
+                    evidence["problems"] = problems
+                ok = not problems
+            if ok and sid == "x402_claim":
+                # B-44: read the live 402 body and check the money it quotes.
+                problems = _x402_claim_semantics(doc, state)
+                evidence["x402Version"] = doc.get("x402Version") if isinstance(doc, dict) else None
+                accepts = doc.get("accepts") if isinstance(doc, dict) else None
+                a0 = accepts[0] if isinstance(accepts, list) and accepts and isinstance(accepts[0], dict) else {}
+                evidence["quoted_amount"] = a0.get("amount")
+                evidence["expected_amount"] = None if _expected_units(state) is None else str(_expected_units(state))
                 evidence["semantics"] = "pass" if not problems else "fail"
                 if problems:
                     evidence["problems"] = problems
