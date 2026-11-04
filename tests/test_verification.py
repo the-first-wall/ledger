@@ -29,10 +29,18 @@ def _no_network(*a, **k):
 class Sandbox(unittest.TestCase):
     def setUp(self):
         self.td = tempfile.mkdtemp()
-        for rel in ("state.json", "permissions.json", "skill.md", "verification.json", "ledger/index.json",
-                    "ledger/anchors.json", "discovery/agent-card.json", "discovery/agent-registration.json"):
+        for rel in ("state.json", "permissions.json", "skill.md", "ledger/index.json",
+                    "ledger/anchors.json", "discovery/agent-card.json", "discovery/agent-registration.json",
+                    "discovery/x402.json"):
             os.makedirs(os.path.dirname(os.path.join(self.td, rel)) or self.td, exist_ok=True)
             shutil.copy(os.path.join(REPO, rel), os.path.join(self.td, rel))
+        # Build a verification.json for THIS snapshot instead of copying the
+        # committed one: a data branch (an assignment or an apply) moves the
+        # Merkle root, and only the scheduled probe job may re-probe, so the
+        # committed file legitimately lags on such a branch. check() then
+        # short-circuits on the older root; the check-mode tests need a
+        # current-snapshot file so they exercise the file-hash comparisons.
+        self.put(ver.build(self.td, clock=CLOCK, commit="x" * 40))
 
     def tearDown(self):
         shutil.rmtree(self.td, ignore_errors=True)
@@ -54,7 +62,12 @@ class CommittedDocument(unittest.TestCase):
         for c in probes:
             self.assertEqual(c["evidence"]["method"], "GET")
             self.assertRegex(c["observed_at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
-        self.assertEqual(doc["root"], json.loads(_read("state.json"))["merkle_root"])
+        self.assertRegex(doc["root"], r"^[0-9a-f]{64}$")
+        # doc["root"] need not equal state.json's Merkle root here: a data branch
+        # (an assignment, an apply) moves the root and only the scheduled probe
+        # job re-probes, so the committed file legitimately lags on such a
+        # branch. `check()` already treats an older root as stale, not wrong;
+        # `OfflineBuild`/`CheckMode` exercise the current-snapshot path.
 
     def test_check_passes_offline(self):
         with mock.patch("urllib.request.urlopen", _no_network):
