@@ -1,18 +1,18 @@
 {
   "schema": "thefirstwall.verification/1",
-  "root": "16c0c16db7484a0e036c2f7e9b51a62bbd76d63b2b93ecf2c830a0d4e8a9c405",
+  "root": "60c2dcdc2ad3e767d8c148d83a2b4179e3153e080a0c5da52f87b8a6ab400433",
   "as_of_block": 52868873,
-  "ledger_commit": "d829e06731b247de19d018093e2fb3796c71e2e1",
+  "ledger_commit": "e90b8ba9523cf3f8d639183815af6f4bc1291faf",
   "anchor": {
     "tx": "0xfd5dacf41cd11b54e3529fdda9ac1fa679ba8d0400019083ccc1b7b7b3eab2cb",
     "block": 52868873
   },
-  "slots": 2,
+  "slots": 3,
   "checks": [
     {
       "id": "skill_sha256",
       "status": "pass",
-      "observed_at": "2026-11-04T19:55:36Z",
+      "observed_at": "2026-11-04T20:59:51Z",
       "evidence": {
         "file": "skill.md",
         "sha256": "8c208807e91955526e4f817084074bd3c7370ad76c8246a0a3f760614ebfc51b",
@@ -22,7 +22,7 @@
     {
       "id": "discovery.agent_registration_sha256",
       "status": "pass",
-      "observed_at": "2026-11-04T19:55:36Z",
+      "observed_at": "2026-11-04T20:59:51Z",
       "evidence": {
         "file": "discovery/agent-registration.json",
         "sha256": "873754792f0d5910afd7a9adc7f5501f29b9c7446f46040374b9f8c47bab2bec",
@@ -32,7 +32,7 @@
     {
       "id": "discovery.agent_card_sha256",
       "status": "pass",
-      "observed_at": "2026-11-04T19:55:36Z",
+      "observed_at": "2026-11-04T20:59:51Z",
       "evidence": {
         "file": "discovery/agent-card.json",
         "sha256": "5432c9474f615f9cf3553736821d59df937c3534e4b19d15b9ae60e2f5f3525c",
@@ -42,7 +42,7 @@
     {
       "id": "discovery.x402_manifest_sha256",
       "status": "pass",
-      "observed_at": "2026-11-04T19:55:36Z",
+      "observed_at": "2026-11-04T20:59:51Z",
       "evidence": {
         "file": "discovery/x402.json",
         "sha256": "53d3120d465eb87ea7ed8863089e7d1ebb8b7923594e47d0c2c16a544fb2020b",
@@ -52,7 +52,7 @@
     {
       "id": "permissions_manifest",
       "status": "pass",
-      "observed_at": "2026-11-04T19:55:36Z",
+      "observed_at": "2026-11-04T20:59:51Z",
       "evidence": {
         "file": "permissions.json",
         "problems": [],
@@ -62,51 +62,28 @@
     {
       "id": "merkle_root_matches_index",
       "status": "pass",
-      "observed_at": "2026-11-04T19:55:36Z",
+      "observed_at": "2026-11-04T20:59:51Z",
       "evidence": {
-        "state": "16c0c16db7484a0e036c2f7e9b51a62bbd76d63b2b93ecf2c830a0d4e8a9c405",
-        "index": "16c0c16db7484a0e036c2f7e9b51a62bbd76d63b2b93ecf2c830a0d4e8a9c405"
-      }
-    },
-    {
-      "id": "http_probe.x402_manifest",
-      "status": "pass",
-      "observed_at": "2026-11-04T19:55:36Z",
-      "evidence": {
-        "url": "https://x402.thefirstwall.ai/.well-known/x402",
-        "method": "GET",
-        "http_status": 200,
-        "bytes": 2028,
-        "served_body_sha256": "53d3120d465eb87ea7ed8863089e7d1ebb8b7923594e47d0c2c16a544fb2020b",
-        "x402Version": 2,
-        "semantics": "pass"
-      }
-    },
-    {
-      "id": "http_probe.ledger_state",
-      "status": "pass",
-      "observed_at": "2026-11-04T19:55:36Z",
-      "evidence": {
-        "url": "https://thefirstwall.ai/state.json",
-        "method": "GET",
-        "http_status": 200,
-        "bytes": 2334,
-        "served_body_sha256": "c8ea84324c9e2a3a6159250554c12cd12ea4c3db5c5fb2c2fc446086e0bb9413",
-        "live_merkle_root": "16c0c16db7484a0e036c2f7e9b51a62bbd76d63b2b93ecf2c830a0d4e8a9c405",
-        "matches_repo_root": true
+        "state": "60c2dcdc2ad3e767d8c148d83a2b4179e3153e080a0c5da52f87b8a6ab400433",
+        "index": "60c2dcdc2ad3e767d8c148d83a2b4179e3153e080a0c5da52f87b8a6ab400433"
       }
     }
   ],
   "services": [
     {
       "url": "https://x402.thefirstwall.ai/.well-known/x402",
-      "status": "up",
-      "checked_at": "2026-11-04T19:55:36Z"
+      "status": "unprobed",
+      "checked_at": null
     },
     {
       "url": "https://thefirstwall.ai/state.json",
-      "status": "up",
-      "checked_at": "2026-11-04T19:55:36Z"
+      "status": "unprobed",
+      "checked_at": null
+    },
+    {
+      "url": "https://x402.thefirstwall.ai/claim",
+      "status": "unprobed",
+      "checked_at": null
     }
   ]
 }
