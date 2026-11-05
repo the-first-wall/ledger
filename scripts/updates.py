@@ -229,6 +229,11 @@ def write_derived(base_dir: str) -> None:
         with open(tmp, "w", encoding="utf-8") as fh:
             fh.write(core.render(obj))
         os.replace(tmp, path)
+    # The per-slot proofs + receipts, where this tree publishes them (the
+    # repository does; an overlay has no records/ and is not given one).
+    if os.path.isdir(os.path.join(base_dir, "records")):
+        import records  # noqa: E402  (same scripts dir)
+        records.write_records(base_dir)
 
 
 # --- The overlay: a request verified as the slot it would become ---------------

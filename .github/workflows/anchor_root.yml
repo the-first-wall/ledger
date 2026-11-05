@@ -74,7 +74,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if git diff --quiet -- ledger/anchors.json; then
+          if git diff --quiet -- ledger/anchors.json records; then
             echo "No new anchor recorded; nothing to commit."
             exit 0
           fi
@@ -82,7 +82,7 @@ jobs:
           git config user.email "bot@thefirstwall.ai"
           BRANCH="anchor/root-$(date +%Y%m%d-%H%M%S)"
           git checkout -b "$BRANCH"
-          git add ledger/anchors.json
+          git add ledger/anchors.json records
           git commit -m "anchor: commit Merkle root on Base"
           git push origin "$BRANCH"
           gh pr create --fill --base main --head "$BRANCH" \

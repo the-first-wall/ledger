@@ -130,8 +130,13 @@ python scripts/merkle_proof.py w1-b0001 --out proof.json
 python scripts/merkle_proof.py --verify proof.json ledger/w1/w1-b0001.json ledger/w1/w1-b0001.webp --root <anchored root>
 ```
 
+The generator also publishes every slot's proof, with its settlement receipt
+(payer, amount, tx, block, confirmations at the anchor, bundle hash, anchoring tx),
+as [`records/<slot>.proof.json`](records/) (spec.md §2.20); the same `--verify`
+command accepts it directly.
+
 ```bash
-python scripts/generate_state.py --check   # verify no drift (state, index, settlements, canvas composite)
+python scripts/generate_state.py --check   # verify no drift (state, index, settlements, records/, canvas composite)
 python scripts/generate_state.py           # regenerate them
 python scripts/verifier.py --skip-rpc      # every offline invariant
 python scripts/verifier.py --rpc-scope all # …plus every settlement and the latest anchor on Base

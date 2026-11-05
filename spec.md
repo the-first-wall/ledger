@@ -588,3 +588,45 @@ that missed its heartbeat on 2026-11-10 is absent *since 2026-11-10* on every la
 block `{expected_heartbeat, last_witnessed_at, absent_after, absent_since, as_of, rule}` is
 published in `records/<slot>.proof.json` (§2.20); `<slot>.liveness` checks the declaration.
 Inscriptions that declare no heartbeat carry no liveness claim either way.
+
+### 2.20 Published proofs and receipts
+
+The inclusion proof of §2.12 is not only computable; it is **published**. For every claimed slot
+`scripts/generate_state.py` writes `records/<slot_id>.proof.json` (generated, never hand-edited;
+`--check` fails on drift, a missing file or a stray one), and the web mirror serves it next to the
+record:
+
+```json
+{
+  "schema": "thefirstwall.proof/1", "wall_id": "wall_01", "scheme": "reckoning",
+  "slot_id": "w1-b0006", "leaf_index": 2, "tree_size": 3, "leaf_hash": "…", "path": ["…"], "root": "…",
+  "files": {"dossier": "ledger/w1/w1-b0006.json", "icon": "ledger/w1/w1-b0006.webp"},
+  "verify": "python scripts/merkle_proof.py --verify records/w1-b0006.proof.json … --root <root>",
+  "liveness": null,
+  "receipt": {
+    "payer": "0x…", "amount_usdc": 1.0, "tx_hash": "0x…", "block_number": 53517691,
+    "confirmations": 20449, "bundle_sha256": "…", "anchor_tx": "0x…",
+    "proof_path": "records/w1-b0006.proof.json"
+  }
+}
+```
+
+The proof part is exactly `scripts/merkle_proof.py`'s output, so `merkle_proof.py --verify`
+checks the file against nothing but the slot's two committed files and the root anchored on Base.
+Each record carries **one** receipt, every field derived from committed bytes:
+
+| Field | Source |
+| :-- | :-- |
+| `payer` | the wallet that settled the inscription (the first owner on record — the address the verifier proves the USDC `Transfer` from) |
+| `amount_usdc`, `block_number` | the dossier's `settlement` (null on a legacy record sealed without one) |
+| `tx_hash` | `base_tx_hash` |
+| `confirmations` | confirmations of the settlement **at the anchoring block** (`anchor block − settlement block + 1`): a lower bound that only grows; null while the current root is unanchored |
+| `bundle_sha256` | the bundle hash of the committed dossier + icon (§2.14) |
+| `anchor_tx` | the Base transaction in `ledger/anchors.json` that commits the current root; null while unanchored |
+| `proof_path` | the record's own path |
+
+`liveness` is the derived block of §2.19 (null when no heartbeat is declared). Because the receipt
+names the anchor, `scripts/anchor_root.py --send` regenerates the records after it appends an
+anchor and the anchor pull request carries them. The verifier (`records.proofs`) re-derives every
+record and re-proves every path from the bytes.
+

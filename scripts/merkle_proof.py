@@ -28,10 +28,13 @@ import ledger_core as core  # noqa: E402
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 
-def build_proof(slot_id: str) -> dict:
-    slot_dir = core.ledger_w1_dir(BASE_DIR)
-    slots = core.list_slot_files(slot_dir)
-    leaves = core.compute_leaves(slot_dir, slots)
+def build_proof(slot_id: str, base_dir: str = BASE_DIR, leaves=None) -> dict:
+    """The audit path from `slot_id`'s leaf to the root of the ledger at
+    base_dir. `leaves` (from core.compute_leaves) may be passed when building
+    many proofs over the same tree."""
+    if leaves is None:
+        slot_dir = core.ledger_w1_dir(base_dir)
+        leaves = core.compute_leaves(slot_dir, core.list_slot_files(slot_dir))
     ids = [sid for sid, _ in leaves]
     if slot_id not in ids:
         raise SystemExit(f"[✗] {slot_id} is not a claimed slot")

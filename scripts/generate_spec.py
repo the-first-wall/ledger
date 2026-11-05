@@ -296,6 +296,18 @@ INVARIANTS = [
         "enforced_by": "scripts/provenance.py via scripts/verifier.py::verify_provenance",
     },
     {
+        "id": "published-inclusion-proofs",
+        "summary": "For every claimed slot the generator publishes records/<slot>.proof.json: the RFC 6962 "
+                   "audit path from the slot's leaf (its committed dossier + icon bytes) to the current "
+                   "merkle_root, and exactly one receipt {payer, amount_usdc, tx_hash, block_number, "
+                   "confirmations, bundle_sha256, anchor_tx, proof_path}, every field derived from committed "
+                   "bytes (confirmations = anchor block - settlement block + 1; anchor_tx and confirmations "
+                   "are null while the root is unanchored). generate_state.py --check fails on drift and the "
+                   "verifier re-proves every path from the bytes.",
+        "enforced_by": "scripts/records.py::verify_records via scripts/verifier.py (records.proofs) + "
+                       "scripts/generate_state.py --check",
+    },
+    {
         "id": "liveness-dated-absence",
         "summary": "An inscription may declare expected_heartbeat (ISO 8601 whole days, P1D-P9999D) and "
                    "last_witnessed_at, as a pair; the witness must equal one of the dossier's attested "

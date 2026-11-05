@@ -46,7 +46,7 @@
         "path_pattern": "^ledger/claims/(0x[0-9a-f]{64})\\.soul\\.json$"
       }
     ],
-    "never_write": ["ledger/w1/", "ledger/souls/", "ledger/index.json", "ledger/settlements.json", "ledger/anchors.json", "state.json", "canvas/", "schemas/", "scripts/", "skill.md", "discovery/"]
+    "never_write": ["ledger/w1/", "ledger/souls/", "ledger/index.json", "ledger/settlements.json", "ledger/anchors.json", "state.json", "canvas/", "records/", "absent/", "schemas/", "scripts/", "skill.md", "discovery/"]
   },
   "secrets": {
     "reads_secrets": false,

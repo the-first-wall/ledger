@@ -63,7 +63,7 @@ jobs:
             echo "Nothing placed; nothing to verify."
             exit 0
           fi
-          git add -A ledger state.json canvas
+          git add -A ledger state.json canvas records
           git -c user.name=the-first-wall-bot -c user.email=bot@thefirstwall.ai commit -q -m "assign: place pending claims"
           python scripts/verifier.py --rpc-scope changed
           python scripts/generate_state.py --check

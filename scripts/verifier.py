@@ -70,6 +70,7 @@ import ledger_core as core  # noqa: E402
 import content_safety as safety  # noqa: E402
 import claims  # noqa: E402
 import provenance  # noqa: E402
+import records  # noqa: E402
 import updates  # noqa: E402
 
 BASE_CHAIN_ID = 8453
@@ -113,6 +114,7 @@ ICON_FILE_RE = re.compile(r"^ledger/w1/(w1-b(?:\d{4}|10000))\.webp$")
 SOUL_FILE_RE = re.compile(r"^ledger/souls/(w1-b(?:\d{4}|10000))\.soul\.json$")
 CLAIM_FILE_RES = (claims.CLAIM_FILE_RE, claims.CLAIM_ICON_RE, claims.CLAIM_SOUL_RE)
 UPDATE_FILE_RES = updates.UPDATE_FILE_RES
+RECORD_FILE_RE = records.RECORD_FILE_RE
 # Files the generator rewrites whenever a slot lands or changes. Only the bot's
 # assignment and apply pull requests carry them; an owner's pull request never does.
 GENERATED_PATHS = {
@@ -321,7 +323,8 @@ def scope_of(entries: List[Tuple[str, str]]) -> Dict[str, Any]:
             allowed |= slot_paths_for(sid)
         for tx in claims_deleted:
             allowed |= claims.claim_paths_for(tx)
-        stray = sorted(p for p in paths if p not in allowed)
+        # The per-slot proofs (records/) are generated: an assignment moves every one of them.
+        stray = sorted(p for p in paths if p not in allowed and not RECORD_FILE_RE.match(p))
         if stray:
             raise ValueError(
                 "PR Boundary Violation: an assignment changes only the placed claims' files, the "
@@ -362,7 +365,7 @@ def scope_of(entries: List[Tuple[str, str]]) -> Dict[str, Any]:
             allowed |= slot_paths_for(sid)
         for tx in updates_deleted:
             allowed |= updates.update_paths_for(tx)
-        stray = sorted(p for p in paths if p not in allowed)
+        stray = sorted(p for p in paths if p not in allowed and not RECORD_FILE_RE.match(p))
         if stray:
             raise ValueError(
                 "PR Boundary Violation: an apply changes only the applied requests' files, the changed "
@@ -1447,7 +1450,8 @@ def verify_provenance(base_dir: str, log: "CheckLog") -> None:
     except ValueError as e:
         log.record("skill.signature", "FAIL", str(e))
     log.guard("permissions.manifest",
-              lambda: provenance.check_permissions(base_dir, state, sorted(GENERATED_PATHS)))
+              lambda: provenance.check_permissions(base_dir, state, sorted(GENERATED_PATHS) + [
+                  "records/w1-b0001.proof.json", "absent/0x0000000000000000000000000000000000000000.json"]))
     log.guard("discovery.hashes", lambda: provenance.check_discovery(base_dir, state))
 
 
@@ -2650,6 +2654,7 @@ def run_verification(base_dir: str, *, skip_rpc: bool = False, rpc_scope: str = 
               lambda: verify_state_files(base_dir) or
               "state.json, index.json & settlements.json match derivation")
     log.guard("state.last_updated", lambda: verify_last_updated(base_dir))
+    log.guard("records.proofs", lambda: records.verify_records(base_dir))
     verify_provenance(base_dir, log)
 
     # Identity: the ERC-8004 holder and tokenURI are mutable, so check the chain.
