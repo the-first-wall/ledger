@@ -6,9 +6,20 @@ The First Wall — verification.json (E-10)
 A single, machine-readable statement of what was checked about the ledger and
 when, so an agent need not take liveness on faith:
 
-    {root, as_of_block, ledger_commit, anchor:{tx,block}, slots,
-     checks:[{id,status,observed_at,evidence}],
+    {schema, generated_at, root, as_of_block, ledger_commit, anchor:{tx,block}, slots,
+     checks:[{id,status,observed_at,evidence,invalidates_on}],
      services:[{url,status,checked_at}]}
+
+B-54/B-55: the checks are the verifier's FULL inventory, not a hand-picked few.
+Besides the file-hash assertions and the live probes, every check
+`scripts/verifier.py --skip-rpc` runs is published under its own id — the
+provenance and signature checks included (skill.signature,
+w1-bNNNN.claim_signature, w1-bNNNN.update_signature, update_precondition,
+records.proofs, anchors.current_root, ...) — with status pass | fail | warn |
+skipped (an on-chain check the offline run did not perform). Every check names
+`invalidates_on`, the condition that retires it (claim_signature_matches_bundle,
+anchor_includes_root, http_200(<url>), ...), and the document carries
+`generated_at`, so a stale pass is visibly stale rather than looking current.
 
     python scripts/verification.py                 # write verification.json, OFFLINE (file-hash checks only)
     python scripts/verification.py --probe         # also GET the live endpoints (network; scheduled job only)
@@ -25,8 +36,11 @@ Two kinds of checks, never mixed up:
 
 `--check` never touches the network and never fails because a probe is old. It
 checks the document's shape and, when the file describes THIS snapshot (same
-root and skill hash as state.json), that every file-hash assertion agrees with
-the committed files; a file for an older root is reported as stale (exit 0).
+root, skill hash and latest anchor as the committed files), that every file-hash
+assertion agrees with the committed files and that no published "pass" is
+contradicted by the verifier run now (a stale pass is an error; a published
+warn/fail that has since healed is merely stale); a file for an older snapshot
+is reported as stale (exit 0).
 
 Read-only; no keys. Exit: 0 ok, 1 invalid/contradicted.
 """
@@ -63,8 +77,15 @@ CLAIM_URL = "https://x402.thefirstwall.ai/claim"
 # The extensions the /claim 402 challenge must carry (the Bazaar listing block).
 CLAIM_EXTENSION_KEYS = ("bazaar",)
 USDC_DECIMALS = 6
-TOP_KEYS = {"schema", "root", "as_of_block", "ledger_commit", "anchor", "slots", "checks", "services"}
-STATUSES = {"pass", "fail", "unprobed"}
+TOP_KEYS = {"schema", "generated_at", "root", "as_of_block", "ledger_commit", "anchor", "slots", "checks",
+            "services"}
+CHECK_KEYS = {"id", "status", "observed_at", "evidence", "invalidates_on"}
+STATUSES = {"pass", "fail", "warn", "skipped", "unprobed"}
+VERIFIER_SOURCE = "scripts/verifier.py --skip-rpc"
+# Verifier checks that describe the pending queue, a PR diff or optional
+# artefacts rather than the ledger at this root: they come and go without the
+# root moving, so --check does not require them to be published.
+TRANSIENT_PREFIXES = ("claim:", "update:", "pr.", "apply.", "assignment.", "rpc.", "absent.")
 _TS = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 USER_AGENT = "TheFirstWall-verification/1.0"
 
@@ -110,10 +131,80 @@ def _git_commit(base_dir: str) -> str:
         return "unknown"
 
 
+_SLOT_CHECK = re.compile(r"^(w1-b(?:\d{4}|10000))\.(.+)$")
+_SLOT_RULES = {
+    "claim_signature": "claim_signature_matches_bundle({slot})",
+    "update_signature": "update_signature_matches_bundle({slot})",
+    "update_precondition": "prev_bundle_matches_base({slot})",
+    "liveness": "ledger_clock_passes_absent_after({slot})",
+    "soul_manifest": "sha256_changes(ledger/souls/{slot}.soul.json)",
+    "icon_structure": "sha256_changes(ledger/w1/{slot}.webp)",
+}
+
+
+def invalidates_on(cid: str, status: str = "pass", evidence: Optional[Dict[str, Any]] = None) -> str:
+    """The condition that retires a check: once it holds, the recorded result
+    says nothing about the ledger any more and must be re-derived."""
+    if status == "skipped":
+        return "rpc_unverified(run scripts/verifier.py without --skip-rpc)"
+    if cid.startswith("http_probe."):
+        ev = evidence or {}
+        return f"http_{ev.get('expected_status', 200)}({ev.get('url', '?')})"
+    if cid in ("skill_sha256", "skill.hash"):
+        return "sha256_changes(skill.md)"
+    if cid == "skill.signature":
+        return "skill_sig_matches_sha256(skill.md.sig, skill.md)"
+    if cid.startswith("discovery."):
+        rel = core.DISCOVERY_FILES.get(cid.split(".", 1)[1])
+        return f"sha256_changes({rel})" if rel else "sha256_changes(discovery/*)"
+    if cid in ("permissions_manifest", "permissions.manifest"):
+        return "file_changes(permissions.json)"
+    if cid.startswith("anchors"):
+        return "anchor_includes_root"
+    m = _SLOT_CHECK.match(cid)
+    if m:
+        slot, what = m.group(1), m.group(2)
+        rule = _SLOT_RULES.get(what, "slot_bytes_change(ledger/w1/{slot}.json)")
+        return rule.format(slot=slot)
+    if cid.startswith(("claim:", "update:")):
+        return "pending_queue_changes(ledger/claims, ledger/updates)"
+    if cid.startswith(("state.", "records.", "ledger.", "merkle_root", "absent.")):
+        return "root_changes"
+    return "ledger_commit_changes"
+
+
+def verifier_checks(base_dir: str, observed_at: str) -> List[Dict[str, Any]]:
+    """Every check the offline verifier runs, published under its own id (B-54).
+    Run in-process with --skip-rpc semantics and the scope of an infrastructure
+    run (no PR diff); its console output is suppressed."""
+    import contextlib
+    import io
+    import verifier  # noqa: E402  (same scripts dir; heavy: jsonschema, Pillow)
+    with contextlib.redirect_stdout(io.StringIO()):
+        report = verifier.run_verification(base_dir, skip_rpc=True,
+                                           scope_override=verifier.make_scope("infra"))
+    out: List[Dict[str, Any]] = []
+    seen: Dict[str, int] = {}
+    for r in report["checks"]:
+        cid = r["check"]
+        seen[cid] = seen.get(cid, 0) + 1
+        if seen[cid] > 1:
+            cid = f"{cid}#{seen[cid]}"
+        detail = str(r.get("detail") or "")
+        status = {"PASS": "pass", "FAIL": "fail"}.get(r["status"], "warn")
+        if status == "warn" and "skipped (--skip-rpc)" in detail:
+            status = "skipped"
+        out.append({"id": cid, "status": status, "observed_at": observed_at,
+                    "evidence": {"detail": detail, "source": VERIFIER_SOURCE},
+                    "invalidates_on": invalidates_on(cid, status)})
+    return out
+
+
 def file_checks(base_dir: str, state: Dict[str, Any], observed_at: str) -> List[Dict[str, Any]]:
     """Offline assertions about the committed bytes. Deterministic given the files."""
     def mk(cid: str, ok: bool, evidence: Dict[str, Any]) -> Dict[str, Any]:
-        return {"id": cid, "status": "pass" if ok else "fail", "observed_at": observed_at, "evidence": evidence}
+        return {"id": cid, "status": "pass" if ok else "fail", "observed_at": observed_at, "evidence": evidence,
+                "invalidates_on": invalidates_on(cid)}
 
     out = []
     skill = core.sha256_file(os.path.join(base_dir, core.SKILL_FILE))
@@ -324,7 +415,7 @@ def probe_checks(state: Dict[str, Any], fetch: Fetch, clock: Callable[[], str],
                 evidence["matches_repo_root"] = live == state.get("merkle_root")
                 ok = live is not None  # a lagging deploy is recorded, not hidden, but the endpoint is live
         checks.append({"id": f"http_probe.{sid}", "status": "pass" if ok else "fail", "observed_at": at,
-                       "evidence": evidence})
+                       "evidence": evidence, "invalidates_on": invalidates_on(f"http_probe.{sid}", "pass", evidence)})
         services.append({"url": url, "status": "up" if ok else "down", "checked_at": at})
     return checks, services
 
@@ -334,7 +425,9 @@ def build(base_dir: str = BASE_DIR, *, probe: bool = False, fetch: Fetch = http_
     state = _load(base_dir, "state.json")
     anchors = _load(base_dir, "ledger/anchors.json")
     last = anchors[-1] if isinstance(anchors, list) and anchors else {}
-    checks = file_checks(base_dir, state, clock())
+    generated_at = clock()
+    checks = file_checks(base_dir, state, generated_at)
+    checks += verifier_checks(base_dir, generated_at)
     if probe:
         authored = _load(base_dir, core.DISCOVERY_FILES["x402_manifest_sha256"])
         pchecks, services = probe_checks(state, fetch, clock, authored)
@@ -343,6 +436,7 @@ def build(base_dir: str = BASE_DIR, *, probe: bool = False, fetch: Fetch = http_
         services = [{"url": url, "status": "unprobed", "checked_at": None} for _, url in SERVICES]
     return {
         "schema": SCHEMA,
+        "generated_at": generated_at,
         "root": state.get("merkle_root"),
         "as_of_block": last.get("block_number"),
         "ledger_commit": commit if commit is not None else _git_commit(base_dir),
@@ -361,6 +455,8 @@ def _shape_errors(doc: Any) -> List[str]:
         errs.append(f"top-level keys must be exactly {sorted(TOP_KEYS)}")
     if doc.get("schema") != SCHEMA:
         errs.append(f"schema must be {SCHEMA!r}")
+    if not (isinstance(doc.get("generated_at"), str) and _TS.match(doc.get("generated_at") or "")):
+        errs.append("generated_at must be an RFC 3339 UTC timestamp")
     if not isinstance(doc.get("root"), str) or not re.fullmatch(r"[0-9a-f]{64}", doc.get("root") or ""):
         errs.append("root must be a 64-hex Merkle root")
     if not isinstance(doc.get("slots"), int):
@@ -374,10 +470,14 @@ def _shape_errors(doc: Any) -> List[str]:
         errs.append("checks must be a non-empty list")
         checks = []
     for c in checks:
-        if not isinstance(c, dict) or set(c) != {"id", "status", "observed_at", "evidence"}:
-            errs.append("each check must be exactly {id,status,observed_at,evidence}")
+        if not isinstance(c, dict) or set(c) != CHECK_KEYS:
+            errs.append("each check must be exactly {id,status,observed_at,evidence,invalidates_on}")
             continue
+        if c["id"] in ids:
+            errs.append(f"check id {c['id']} appears twice")
         ids.add(c["id"])
+        if not (isinstance(c["invalidates_on"], str) and c["invalidates_on"].strip()):
+            errs.append(f"check {c['id']} must name invalidates_on (the condition that retires it)")
         if c["status"] not in STATUSES:
             errs.append(f"check {c['id']} has status {c['status']!r}")
         if not (isinstance(c["observed_at"], str) and _TS.match(c["observed_at"])):
@@ -409,10 +509,16 @@ def check(base_dir: str = BASE_DIR) -> List[str]:
     if errs:
         return errs
     state = _load(base_dir, "state.json")
-    # A file written for an older root/skill is stale, not wrong: the scheduled job refreshes it.
+    # A file written for an older root/skill/anchor is stale, not wrong: the scheduled job refreshes it.
     skill_check = next((c for c in doc["checks"] if c["id"] == "skill_sha256"), None)
+    try:
+        anchors = _load(base_dir, "ledger/anchors.json")
+    except (OSError, ValueError):
+        anchors = []
+    last = anchors[-1] if isinstance(anchors, list) and anchors and isinstance(anchors[-1], dict) else {}
     same_snapshot = (doc["root"] == state.get("merkle_root")
-                     and (skill_check or {}).get("evidence", {}).get("sha256") == state.get("skill_sha256"))
+                     and (skill_check or {}).get("evidence", {}).get("sha256") == state.get("skill_sha256")
+                     and doc["anchor"].get("tx") == last.get("tx_hash"))
     if not same_snapshot:
         return []
     errs = []
@@ -426,6 +532,36 @@ def check(base_dir: str = BASE_DIR) -> List[str]:
             errs.append(f"check {cid} is missing")
         elif got["status"] != real["status"] or got["evidence"] != real["evidence"]:
             errs.append(f"check {cid} contradicts the committed files (status/evidence differ)")
+    errs += _verifier_contradictions(base_dir, claimed)
+    return errs
+
+
+def _verifier_contradictions(base_dir: str, claimed: Dict[str, Dict[str, Any]]) -> List[str]:
+    """The published verifier inventory against a verifier run now (B-54/B-55).
+    An error is a STALE PASS (published pass, not a pass now, or a published
+    check that no longer exists) or a missing check of the ledger itself; a
+    published warn/fail that has since healed is only stale. Detail strings may
+    legitimately differ between machines and are not compared."""
+    errs: List[str] = []
+    truth = {c["id"]: c for c in verifier_checks(base_dir, "1970-01-01T00:00:00Z")}
+    published = {cid: c for cid, c in claimed.items()
+                 if isinstance(c.get("evidence"), dict) and c["evidence"].get("source") == VERIFIER_SOURCE}
+    if not published:
+        return ["the verifier's checks are not published (B-54): rebuild with scripts/verification.py"]
+    for cid, real in truth.items():
+        if cid not in published and not cid.startswith(TRANSIENT_PREFIXES):
+            errs.append(f"check {cid} is run by the verifier but not published")
+    for cid, got in published.items():
+        real = truth.get(cid)
+        if real is None:
+            if got["status"] == "pass" and not cid.startswith(TRANSIENT_PREFIXES):
+                errs.append(f"check {cid} is published as pass but the verifier no longer runs it (stale pass)")
+        elif got["status"] == "pass" and real["status"] != "pass":
+            errs.append(f"check {cid} is published as pass but the verifier now says {real['status']} "
+                        f"(stale pass): {real['evidence']['detail'][:160]}")
+        if real is not None and got.get("invalidates_on") != real["invalidates_on"]:
+            errs.append(f"check {cid} names invalidates_on {got.get('invalidates_on')!r}, "
+                        f"expected {real['invalidates_on']!r}")
     return errs
 
 

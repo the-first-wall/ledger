@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(REPO, "scripts"))
 
 import verification as ver  # noqa: E402
 
-TOP = {"schema", "root", "as_of_block", "ledger_commit", "anchor", "slots", "checks", "services"}
+TOP = {"schema", "generated_at", "root", "as_of_block", "ledger_commit", "anchor", "slots", "checks", "services"}
 CLOCK = lambda: "2026-10-30T12:00:00Z"  # noqa: E731
 
 
@@ -28,12 +28,10 @@ def _no_network(*a, **k):
 
 class Sandbox(unittest.TestCase):
     def setUp(self):
-        self.td = tempfile.mkdtemp()
-        for rel in ("state.json", "permissions.json", "skill.md", "ledger/index.json",
-                    "ledger/anchors.json", "discovery/agent-card.json", "discovery/agent-registration.json",
-                    "discovery/x402.json"):
-            os.makedirs(os.path.dirname(os.path.join(self.td, rel)) or self.td, exist_ok=True)
-            shutil.copy(os.path.join(REPO, rel), os.path.join(self.td, rel))
+        # The whole published tree (not .git): the verifier's inventory runs on it too.
+        self.td = os.path.join(tempfile.mkdtemp(), "repo")
+        shutil.copytree(REPO, self.td, ignore=shutil.ignore_patterns(".git", ".worktrees", "__pycache__",
+                                                                     ".pytest_cache"))
         # Build a verification.json for THIS snapshot instead of copying the
         # committed one: a data branch (an assignment or an apply) moves the
         # Merkle root, and only the scheduled probe job may re-probe, so the
@@ -43,7 +41,7 @@ class Sandbox(unittest.TestCase):
         self.put(ver.build(self.td, clock=CLOCK, commit="x" * 40))
 
     def tearDown(self):
-        shutil.rmtree(self.td, ignore_errors=True)
+        shutil.rmtree(os.path.dirname(self.td), ignore_errors=True)
 
     def doc(self):
         return json.loads(open(os.path.join(self.td, "verification.json"), encoding="utf-8").read())
@@ -84,8 +82,42 @@ class OfflineBuild(unittest.TestCase):
             b = ver.build(REPO, clock=CLOCK, commit="x" * 40)
         self.assertEqual(a, b)
         self.assertTrue(all(s["status"] == "unprobed" and s["checked_at"] is None for s in a["services"]))
-        self.assertTrue(all(c["status"] == "pass" for c in a["checks"]), a["checks"])
+        self.assertFalse([c for c in a["checks"] if c["status"] == "fail"])
         self.assertFalse(any(c["id"].startswith("http_probe.") for c in a["checks"]))
+        self.assertRegex(a["generated_at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+
+    def test_b54_the_full_verifier_inventory_is_published(self):
+        """B-54/B-55: every check the verifier runs, the provenance/signature checks included."""
+        import contextlib
+        import io
+        import verifier
+        with mock.patch("urllib.request.urlopen", _no_network):
+            doc = ver.build(REPO, clock=CLOCK, commit="x" * 40)
+        with contextlib.redirect_stdout(io.StringIO()):
+            report = verifier.run_verification(REPO, skip_rpc=True, scope_override=verifier.make_scope("infra"))
+        ids = {c["id"] for c in doc["checks"]}
+        self.assertGreaterEqual(len(doc["checks"]), len(report["checks"]))
+        self.assertTrue({r["check"] for r in report["checks"]} <= ids)
+        for needed in ("skill.signature", "skill.hash", "w1-b0001.claim_signature", "w1-b0002.claim_signature",
+                       "w1-b0001.update_signature", "w1-b0001.update_precondition", "records.proofs",
+                       "anchors.current_root", "permissions.manifest", "discovery.hashes"):
+            self.assertIn(needed, ids)
+        rpc = [c for c in doc["checks"] if c["id"].endswith("_base_rpc") or c["id"].endswith("on_chain")]
+        self.assertTrue(rpc and all(c["status"] == "skipped" for c in rpc), rpc)
+
+    def test_b55_every_check_names_what_retires_it(self):
+        with mock.patch("urllib.request.urlopen", _no_network):
+            doc = ver.build(REPO, clock=CLOCK, commit="x" * 40)
+        by_id = {c["id"]: c for c in doc["checks"]}
+        self.assertTrue(all(isinstance(c["invalidates_on"], str) and c["invalidates_on"] for c in doc["checks"]))
+        self.assertEqual(by_id["w1-b0001.claim_signature"]["invalidates_on"],
+                         "claim_signature_matches_bundle(w1-b0001)")
+        self.assertEqual(by_id["anchors.current_root"]["invalidates_on"], "anchor_includes_root")
+        self.assertEqual(by_id["skill_sha256"]["invalidates_on"], "sha256_changes(skill.md)")
+        self.assertEqual(ver.invalidates_on("http_probe.ledger_state", "pass",
+                                            {"url": "https://thefirstwall.ai/verification.json",
+                                             "expected_status": 200}),
+                         "http_200(https://thefirstwall.ai/verification.json)")
 
     def _served_manifest(self, mutate=None):
         """The served /.well-known/x402 manifest: the authored discovery document,
@@ -249,6 +281,47 @@ class CheckMode(Sandbox):
         self.put(doc)
         self.assertEqual(ver.check(self.td), [])
 
+    def test_b55_a_stale_pass_is_visible(self):
+        """The published doc says records.proofs passed; the record has since been tampered with
+        (the root did not move), so that pass is stale and --check says so."""
+        rel = os.path.join(self.td, "records", "w1-b0001.proof.json")
+        rec = json.load(open(rel, encoding="utf-8"))
+        rec["receipt"]["amount_usdc"] = 999.0
+        with open(rel, "w", encoding="utf-8") as fh:
+            json.dump(rec, fh)
+        errs = ver.check(self.td)
+        self.assertTrue(any("records.proofs" in e and "stale pass" in e for e in errs), errs)
+
+    def test_b55_a_healed_warning_is_only_stale(self):
+        doc = self.doc()
+        c = next(c for c in doc["checks"] if c["id"] == "anchors.current_root")
+        c["status"] = "warn"
+        self.put(doc)
+        self.assertEqual(ver.check(self.td), [])
+
+    def test_b54_an_unpublished_verifier_check_fails(self):
+        doc = self.doc()
+        doc["checks"] = [c for c in doc["checks"] if c["id"] != "w1-b0002.claim_signature"]
+        self.put(doc)
+        self.assertTrue(any("w1-b0002.claim_signature" in e and "not published" in e for e in ver.check(self.td)))
+
+    def test_b55_generated_at_and_invalidates_on_are_required(self):
+        for mutate in (lambda d: d.pop("generated_at"), lambda d: d.update(generated_at="now"),
+                       lambda d: d["checks"][0].pop("invalidates_on"),
+                       lambda d: d["checks"][0].update(invalidates_on=""),
+                       lambda d: d["checks"].append(dict(d["checks"][0]))):
+            doc = copy.deepcopy(self.doc())
+            mutate(doc)
+            self.put(doc)
+            self.assertTrue(ver.check(self.td), "verification.json without generated_at/invalidates_on accepted")
+
+    def test_a_new_anchor_makes_the_document_stale_not_wrong(self):
+        doc = self.doc()
+        doc["anchor"]["tx"] = "0x" + "00" * 32
+        doc["checks"] = [c for c in doc["checks"] if c["id"] != "anchors.current_root"]
+        self.put(doc)
+        self.assertEqual(ver.check(self.td), [])
+
     def test_missing_file_fails(self):
         os.remove(os.path.join(self.td, "verification.json"))
         self.assertTrue(ver.check(self.td))
@@ -260,6 +333,8 @@ class Workflow(unittest.TestCase):
         for needle in ("cron:", "python scripts/verification.py --probe", "verification.json"):
             self.assertIn(needle, wf)
         self.assertNotIn("--probe", _read(".github/workflows/self_check.yml"))
+        # The probe now runs the verifier in-process: it needs the verifier's pinned dependencies.
+        self.assertIn("eth-account==", wf)
 
 
 if __name__ == "__main__":
