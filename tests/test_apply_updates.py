@@ -12,6 +12,7 @@ applies it and regenerates the state; the verifier re-proves both steps.
 Network-free: on-chain paths use an injected fake RPC.
 """
 
+import contextlib
 import hashlib
 import io
 import json
@@ -217,7 +218,7 @@ class RequestLedger(unittest.TestCase):
                     out[os.path.relpath(path, self.td)] = fh.read()
         return out
 
-    def post(self, new, tx=TX_FEE1, soul_note=None, icon=None, key=SELLER_KEY):
+    def post(self, new, tx=TX_FEE1, soul_note=None, icon=None, key=SELLER_KEY, prev_bundle="current"):
         """Write a request: the dossier, and the manifest / icon when they change.
         The newest fee entry is signed by the owner over the content (the fee proves
         payment, not authorship), hashed with the icon that will be in effect."""
@@ -236,6 +237,13 @@ class RequestLedger(unittest.TestCase):
             # The icon the slot will carry once applied: the request's, else the slot's.
             effective = icon if icon is not None else self.icon_bytes()
             entry = fees[-1]
+            # B-61: the request names the block version it was authored against.
+            if prev_bundle == "current":
+                entry.setdefault("prev_bundle_sha256", updates.slot_bundle(self.td, new["slot_id"]))
+            elif prev_bundle is None:
+                entry.pop("prev_bundle_sha256", None)
+            else:
+                entry["prev_bundle_sha256"] = prev_bundle
             entry["bundle_sha256"] = claims.bundle_sha256(new, effective)
             entry["update_signature"] = claims.sign_update(new["slot_id"], entry["tx_hash"],
                                                            entry["bundle_sha256"], key)
@@ -373,6 +381,30 @@ class RequestVerificationTests(RequestLedger):
         self.assertEqual(status_of(f"update:{TX_FEE1[:12]}.current", report)["status"], "WARN")
         self.assertIn("stale", status_of(f"update:{TX_FEE1[:12]}.current", report)["detail"])
         self.assertEqual(status_of(f"update:{TX_FEE1[:12]}.identity", report)["status"], "PASS")
+        # B-61: the base-version precondition says the same, by hash.
+        self.assertEqual(status_of(f"update:{TX_FEE1[:12]}.precondition", report)["status"], "WARN")
+        self.assertIn("stale", status_of(f"update:{TX_FEE1[:12]}.precondition", report)["detail"])
+
+    def test_b61_a_request_authored_against_an_older_block_is_refused(self):
+        self.post(dict(self.prev, agent_urls={"home": "https://example.com"}, update_settlements=[fee()]),
+                  prev_bundle="ab" * 32)
+        report = self.pr(rpc=self.good_rpc())
+        self.assertEqual(report["result"], "FAIL")
+        self.assertEqual(status_of(f"{SLOT}.update_precondition", report)["status"], "FAIL")
+        self.assertIn("stale update", status_of(f"{SLOT}.update_precondition", report)["detail"])
+
+    def test_b61_a_new_request_without_a_precondition_is_refused(self):
+        self.post(dict(self.prev, agent_urls={"home": "https://example.com"}, update_settlements=[fee()]),
+                  prev_bundle=None)
+        report = self.pr(rpc=self.good_rpc())
+        self.assertEqual(report["result"], "FAIL")
+        self.assertIn("missing prev_bundle_sha256", status_of(f"{SLOT}.update_precondition", report)["detail"])
+
+    def test_b61_a_request_against_the_current_block_passes_the_precondition(self):
+        self.post(dict(self.prev, agent_urls={"home": "https://example.com"}, update_settlements=[fee()]))
+        report = self.pr(rpc=self.good_rpc())
+        self.assertEqual(report["result"], "PASS", failing(report))
+        self.assertEqual(status_of(f"{SLOT}.update_precondition", report)["status"], "PASS")
 
 
 # --------------------------------------------------------------------------- #
@@ -390,6 +422,22 @@ class ApplyTests(RequestLedger):
     def read(self, rel):
         with open(os.path.join(self.td, rel), "rb") as fh:
             return fh.read()
+
+    def test_b61_a_stale_request_stays_pending_and_is_never_merged(self):
+        self.post(dict(self.prev, agent_urls={"home": "https://example.com"}, update_settlements=[fee()]))
+        # The block moves on after the request was authored (fees unchanged, so only the
+        # base-version precondition can tell): main now has a different block.
+        self._write_slot(dict(self.prev, agent_urls={"home": "https://other.example"}))
+        self._generate()
+        self.base = self._snapshot_base()
+        before = self.read(f"ledger/w1/{SLOT}.json")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(self.run_apply(), 0)
+        self.assertIn("update_precondition", out.getvalue())
+        self.assertIn("stale", out.getvalue())
+        self.assertEqual(self.read(f"ledger/w1/{SLOT}.json"), before)
+        self.assertTrue(os.path.exists(os.path.join(self.upd, f"{TX_FEE1}.json")))
 
     def test_the_request_becomes_the_slot_byte_for_byte_and_the_state_follows(self):
         new = self.post(dict(self.prev, agent_urls={"home": "https://example.com"}, update_settlements=[fee()]))

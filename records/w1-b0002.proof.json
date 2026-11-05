@@ -1,0 +1,30 @@
+{
+  "schema": "thefirstwall.proof/1",
+  "wall_id": "wall_01",
+  "scheme": "reckoning",
+  "slot_id": "w1-b0002",
+  "leaf_index": 1,
+  "tree_size": 3,
+  "leaf_hash": "c384a06a41cea8ab47186b60e51eccc9f1115e9427a562336a1989232f08534e",
+  "path": [
+    "99a80d0c2447945a56b7d3903dade6f74291e647e901612d7fb33e57cd03dfd5",
+    "9d52c10701585ed5b575af6e7a1562cf347dfd2e8cc5aa3c108e7efa368b1b6e"
+  ],
+  "root": "60c2dcdc2ad3e767d8c148d83a2b4179e3153e080a0c5da52f87b8a6ab400433",
+  "files": {
+    "dossier": "ledger/w1/w1-b0002.json",
+    "icon": "ledger/w1/w1-b0002.webp"
+  },
+  "verify": "python scripts/merkle_proof.py --verify records/w1-b0002.proof.json ledger/w1/w1-b0002.json ledger/w1/w1-b0002.webp --root 60c2dcdc2ad3e767d8c148d83a2b4179e3153e080a0c5da52f87b8a6ab400433  (then compare the root with the anchor on Base: ledger/anchors.json, calldata reckoning|<root>)",
+  "liveness": null,
+  "receipt": {
+    "payer": "0xE2C6bc227DE40561FE4a513e7FD05B3F7873c512",
+    "amount_usdc": 1.0,
+    "tx_hash": "0x6b88193d2409124393ddfcd8b9daa50deee9a053d6c6f03389e87b5104a6294c",
+    "block_number": 52344732,
+    "confirmations": 1193408,
+    "bundle_sha256": "1cdb2194c0a3f063b2ad03dfcd0e7315142875acaa6483619af495cf26ecb4ce",
+    "anchor_tx": "0x3963796ec0e87d5ea671a0ea045d74594aceb8cc4250c6957a194347ce03c95f",
+    "proof_path": "records/w1-b0002.proof.json"
+  }
+}

@@ -1,77 +1,944 @@
 {
   "schema": "thefirstwall.verification/1",
+  "generated_at": "2026-11-05T14:51:37Z",
   "root": "60c2dcdc2ad3e767d8c148d83a2b4179e3153e080a0c5da52f87b8a6ab400433",
-  "as_of_block": 52868873,
-  "ledger_commit": "890c2c66942ac2bbaff4a31d3072942d9318f977",
+  "as_of_block": 53538139,
+  "ledger_commit": "ab00ac66010e37fdfd2bfe86fceb0e5439dd47b5",
   "anchor": {
-    "tx": "0xfd5dacf41cd11b54e3529fdda9ac1fa679ba8d0400019083ccc1b7b7b3eab2cb",
-    "block": 52868873
+    "tx": "0x3963796ec0e87d5ea671a0ea045d74594aceb8cc4250c6957a194347ce03c95f",
+    "block": 53538139
   },
   "slots": 3,
   "checks": [
     {
       "id": "skill_sha256",
       "status": "pass",
-      "observed_at": "2026-11-05T07:04:36Z",
+      "observed_at": "2026-11-05T14:51:37Z",
       "evidence": {
         "file": "skill.md",
-        "sha256": "8c208807e91955526e4f817084074bd3c7370ad76c8246a0a3f760614ebfc51b",
-        "published": "8c208807e91955526e4f817084074bd3c7370ad76c8246a0a3f760614ebfc51b"
-      }
+        "sha256": "5c75fc1293b1f518bab7a9961c738e493d3bbbaa562cc05db112165ead05e9c9",
+        "published": "5c75fc1293b1f518bab7a9961c738e493d3bbbaa562cc05db112165ead05e9c9"
+      },
+      "invalidates_on": "sha256_changes(skill.md)"
     },
     {
       "id": "discovery.agent_registration_sha256",
       "status": "pass",
-      "observed_at": "2026-11-05T07:04:36Z",
+      "observed_at": "2026-11-05T14:51:37Z",
       "evidence": {
         "file": "discovery/agent-registration.json",
         "sha256": "873754792f0d5910afd7a9adc7f5501f29b9c7446f46040374b9f8c47bab2bec",
         "published": "873754792f0d5910afd7a9adc7f5501f29b9c7446f46040374b9f8c47bab2bec"
-      }
+      },
+      "invalidates_on": "sha256_changes(discovery/agent-registration.json)"
     },
     {
       "id": "discovery.agent_card_sha256",
       "status": "pass",
-      "observed_at": "2026-11-05T07:04:36Z",
+      "observed_at": "2026-11-05T14:51:37Z",
       "evidence": {
         "file": "discovery/agent-card.json",
         "sha256": "5432c9474f615f9cf3553736821d59df937c3534e4b19d15b9ae60e2f5f3525c",
         "published": "5432c9474f615f9cf3553736821d59df937c3534e4b19d15b9ae60e2f5f3525c"
-      }
+      },
+      "invalidates_on": "sha256_changes(discovery/agent-card.json)"
     },
     {
       "id": "discovery.x402_manifest_sha256",
       "status": "pass",
-      "observed_at": "2026-11-05T07:04:36Z",
+      "observed_at": "2026-11-05T14:51:37Z",
       "evidence": {
         "file": "discovery/x402.json",
         "sha256": "53d3120d465eb87ea7ed8863089e7d1ebb8b7923594e47d0c2c16a544fb2020b",
         "published": "53d3120d465eb87ea7ed8863089e7d1ebb8b7923594e47d0c2c16a544fb2020b"
-      }
+      },
+      "invalidates_on": "sha256_changes(discovery/x402.json)"
     },
     {
       "id": "permissions_manifest",
       "status": "pass",
-      "observed_at": "2026-11-05T07:04:36Z",
+      "observed_at": "2026-11-05T14:51:37Z",
       "evidence": {
         "file": "permissions.json",
         "problems": [],
         "active_tier_price_usdc": 1.0
-      }
+      },
+      "invalidates_on": "file_changes(permissions.json)"
     },
     {
       "id": "merkle_root_matches_index",
       "status": "pass",
-      "observed_at": "2026-11-05T07:04:36Z",
+      "observed_at": "2026-11-05T14:51:37Z",
       "evidence": {
         "state": "60c2dcdc2ad3e767d8c148d83a2b4179e3153e080a0c5da52f87b8a6ab400433",
         "index": "60c2dcdc2ad3e767d8c148d83a2b4179e3153e080a0c5da52f87b8a6ab400433"
-      }
+      },
+      "invalidates_on": "root_changes"
+    },
+    {
+      "id": "pr.scope_containment",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "no slot, claim or request touched (infrastructure-only change)",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "ledger_commit_changes"
+    },
+    {
+      "id": "ledger.replay_protection",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "6 settlement tx(s), each cites exactly one slot",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "root_changes"
+    },
+    {
+      "id": "w1-b0001.identity",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "#0001 file, icon and manifest agree",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0001.json)"
+    },
+    {
+      "id": "w1-b0001.schema",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "schema 1.2.0",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0001.json)"
+    },
+    {
+      "id": "w1-b0001.claim_signature",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "signed by 0xE2C6bc227DE40561FE4a513e7FD05B3F7873c512 (v1)",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "claim_signature_matches_bundle(w1-b0001)"
+    },
+    {
+      "id": "w1-b0001.reserved_grant",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0001.json)"
+    },
+    {
+      "id": "w1-b0001.price_ladder",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "paid 1.00 USDC for a 1.00 USDC genesis block",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0001.json)"
+    },
+    {
+      "id": "w1-b0001.soul_manifest",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "sha256_changes(ledger/souls/w1-b0001.soul.json)"
+    },
+    {
+      "id": "w1-b0001.sealed_vault",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "vaults/w1-b0001.tlock.age -> 1da9e6c223364205\u2026",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0001.json)"
+    },
+    {
+      "id": "w1-b0001.soul_manifest_hygiene",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "no machine details",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0001.json)"
+    },
+    {
+      "id": "w1-b0001.append_only",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "unchanged",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0001.json)"
+    },
+    {
+      "id": "w1-b0001.ownership_lineage",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "same owner",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0001.json)"
+    },
+    {
+      "id": "w1-b0001.ownership_chain",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "no transfers",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0001.json)"
+    },
+    {
+      "id": "w1-b0001.update_settlements",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "1 update fee(s) on record",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0001.json)"
+    },
+    {
+      "id": "w1-b0001.update_precondition",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "no new update to check",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "prev_bundle_matches_base(w1-b0001)"
+    },
+    {
+      "id": "w1-b0001.update_signature",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "no signed updates",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "update_signature_matches_bundle(w1-b0001)"
+    },
+    {
+      "id": "w1-b0001.liveness",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "no heartbeat declared",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "ledger_clock_passes_absent_after(w1-b0001)"
+    },
+    {
+      "id": "w1-b0001.icon_structure",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "10x10 lossless WebP, 15 colours, 172 bytes",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "sha256_changes(ledger/w1/w1-b0001.webp)"
+    },
+    {
+      "id": "w1-b0001.content.secrets",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0001.json)"
+    },
+    {
+      "id": "w1-b0001.content.pii",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0001.json)"
+    },
+    {
+      "id": "w1-b0001.content.prohibited",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0001.json)"
+    },
+    {
+      "id": "w1-b0001.content.injection",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0001.json)"
+    },
+    {
+      "id": "w1-b0001.content.fraud",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0001.json)"
+    },
+    {
+      "id": "w1-b0001.content.spam",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0001.json)"
+    },
+    {
+      "id": "w1-b0001.settlement_base_rpc",
+      "status": "skipped",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "skipped (--skip-rpc)",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "rpc_unverified(run scripts/verifier.py without --skip-rpc)"
+    },
+    {
+      "id": "w1-b0001.update_fee_base_rpc",
+      "status": "skipped",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "skipped (--skip-rpc)",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "rpc_unverified(run scripts/verifier.py without --skip-rpc)"
+    },
+    {
+      "id": "w1-b0002.identity",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "#0002 file, icon and manifest agree",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0002.json)"
+    },
+    {
+      "id": "w1-b0002.schema",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "schema 1.2.0",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0002.json)"
+    },
+    {
+      "id": "w1-b0002.claim_signature",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "signed by 0xE2C6bc227DE40561FE4a513e7FD05B3F7873c512 (v1)",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "claim_signature_matches_bundle(w1-b0002)"
+    },
+    {
+      "id": "w1-b0002.reserved_grant",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0002.json)"
+    },
+    {
+      "id": "w1-b0002.price_ladder",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "paid 1.00 USDC for a 1.00 USDC genesis block",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0002.json)"
+    },
+    {
+      "id": "w1-b0002.soul_manifest",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "sha256_changes(ledger/souls/w1-b0002.soul.json)"
+    },
+    {
+      "id": "w1-b0002.soul_manifest_hygiene",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "no machine details",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0002.json)"
+    },
+    {
+      "id": "w1-b0002.append_only",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "unchanged",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0002.json)"
+    },
+    {
+      "id": "w1-b0002.ownership_lineage",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "same owner",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0002.json)"
+    },
+    {
+      "id": "w1-b0002.ownership_chain",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "no transfers",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0002.json)"
+    },
+    {
+      "id": "w1-b0002.update_settlements",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "2 update fee(s) on record",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0002.json)"
+    },
+    {
+      "id": "w1-b0002.update_precondition",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "no new update to check",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "prev_bundle_matches_base(w1-b0002)"
+    },
+    {
+      "id": "w1-b0002.update_signature",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "no signed updates",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "update_signature_matches_bundle(w1-b0002)"
+    },
+    {
+      "id": "w1-b0002.liveness",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "no heartbeat declared",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "ledger_clock_passes_absent_after(w1-b0002)"
+    },
+    {
+      "id": "w1-b0002.icon_structure",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "10x10 lossless WebP, 3 colours, 74 bytes",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "sha256_changes(ledger/w1/w1-b0002.webp)"
+    },
+    {
+      "id": "w1-b0002.content.secrets",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0002.json)"
+    },
+    {
+      "id": "w1-b0002.content.pii",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0002.json)"
+    },
+    {
+      "id": "w1-b0002.content.prohibited",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0002.json)"
+    },
+    {
+      "id": "w1-b0002.content.injection",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0002.json)"
+    },
+    {
+      "id": "w1-b0002.content.fraud",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0002.json)"
+    },
+    {
+      "id": "w1-b0002.content.spam",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0002.json)"
+    },
+    {
+      "id": "w1-b0002.settlement_base_rpc",
+      "status": "skipped",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "skipped (--skip-rpc)",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "rpc_unverified(run scripts/verifier.py without --skip-rpc)"
+    },
+    {
+      "id": "w1-b0002.update_fee_base_rpc",
+      "status": "skipped",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "skipped (--skip-rpc)",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "rpc_unverified(run scripts/verifier.py without --skip-rpc)"
+    },
+    {
+      "id": "w1-b0006.identity",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "#0006 file, icon and manifest agree",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0006.json)"
+    },
+    {
+      "id": "w1-b0006.schema",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "schema 1.3.0",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0006.json)"
+    },
+    {
+      "id": "w1-b0006.claim_signature",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "signed by 0xE2C6bc227DE40561FE4a513e7FD05B3F7873c512 (v2)",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "claim_signature_matches_bundle(w1-b0006)"
+    },
+    {
+      "id": "w1-b0006.reserved_grant",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0006.json)"
+    },
+    {
+      "id": "w1-b0006.price_ladder",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "paid 1.00 USDC for a 1.00 USDC genesis block",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0006.json)"
+    },
+    {
+      "id": "w1-b0006.soul_manifest",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "sha256_changes(ledger/souls/w1-b0006.soul.json)"
+    },
+    {
+      "id": "w1-b0006.soul_manifest_hygiene",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "no machine details",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0006.json)"
+    },
+    {
+      "id": "w1-b0006.append_only",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "unchanged",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0006.json)"
+    },
+    {
+      "id": "w1-b0006.ownership_lineage",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "same owner",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0006.json)"
+    },
+    {
+      "id": "w1-b0006.ownership_chain",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "no transfers",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0006.json)"
+    },
+    {
+      "id": "w1-b0006.update_settlements",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "no updates yet",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0006.json)"
+    },
+    {
+      "id": "w1-b0006.update_precondition",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "no new update to check",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "prev_bundle_matches_base(w1-b0006)"
+    },
+    {
+      "id": "w1-b0006.update_signature",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "no signed updates",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "update_signature_matches_bundle(w1-b0006)"
+    },
+    {
+      "id": "w1-b0006.liveness",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "no heartbeat declared",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "ledger_clock_passes_absent_after(w1-b0006)"
+    },
+    {
+      "id": "w1-b0006.icon_structure",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "10x10 lossless WebP, 2 colours, 44 bytes",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "sha256_changes(ledger/w1/w1-b0006.webp)"
+    },
+    {
+      "id": "w1-b0006.content.secrets",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0006.json)"
+    },
+    {
+      "id": "w1-b0006.content.pii",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0006.json)"
+    },
+    {
+      "id": "w1-b0006.content.prohibited",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0006.json)"
+    },
+    {
+      "id": "w1-b0006.content.injection",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0006.json)"
+    },
+    {
+      "id": "w1-b0006.content.fraud",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0006.json)"
+    },
+    {
+      "id": "w1-b0006.content.spam",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "slot_bytes_change(ledger/w1/w1-b0006.json)"
+    },
+    {
+      "id": "w1-b0006.settlement_base_rpc",
+      "status": "skipped",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "skipped (--skip-rpc)",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "rpc_unverified(run scripts/verifier.py without --skip-rpc)"
+    },
+    {
+      "id": "state.root_integrity",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "state.json, index.json & settlements.json match derivation",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "root_changes"
+    },
+    {
+      "id": "state.last_updated",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "last_updated 2026-11-04T20:39:15Z = newest content (w1-b0006 timestamp_verified)",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "root_changes"
+    },
+    {
+      "id": "records.proofs",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "3 inclusion proof(s) verify to the current root; 3 receipt(s) name the anchoring tx",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "root_changes"
+    },
+    {
+      "id": "skill.hash",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "skill.md 1.3.1 matches the published sha256 5c75fc1293b1\u2026",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "sha256_changes(skill.md)"
+    },
+    {
+      "id": "skill.signature",
+      "status": "warn",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "skill.md.sig signs 8c208807e919\u2026, but skill.md is now 5c75fc1293b1\u2026: re-sign it",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "skill_sig_matches_sha256(skill.md.sig, skill.md)"
+    },
+    {
+      "id": "permissions.manifest",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "permissions.json is well-formed and within what the verifier allows",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "file_changes(permissions.json)"
+    },
+    {
+      "id": "discovery.hashes",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "discovery documents match their published sha256",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "sha256_changes(discovery/*)"
+    },
+    {
+      "id": "identity.on_chain",
+      "status": "skipped",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "skipped (--skip-rpc)",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "rpc_unverified(run scripts/verifier.py without --skip-rpc)"
+    },
+    {
+      "id": "anchors[0].record",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "root 0c8ca2ae4b27\u2026 tx 0xfb899b2867\u2026",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "anchor_includes_root"
+    },
+    {
+      "id": "anchors[1].record",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "root 970d1102cd58\u2026 tx 0xa8a75b4eec\u2026",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "anchor_includes_root"
+    },
+    {
+      "id": "anchors[2].record",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "root 983210b6295c\u2026 tx 0x5498990c70\u2026",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "anchor_includes_root"
+    },
+    {
+      "id": "anchors[3].record",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "root 16c0c16db748\u2026 tx 0xfd5dacf41c\u2026",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "anchor_includes_root"
+    },
+    {
+      "id": "anchors[4].record",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "root 60c2dcdc2ad3\u2026 tx 0x3963796ec0\u2026",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "anchor_includes_root"
+    },
+    {
+      "id": "anchors.on_chain",
+      "status": "skipped",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "skipped (--skip-rpc)",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "rpc_unverified(run scripts/verifier.py without --skip-rpc)"
+    },
+    {
+      "id": "anchors.current_root",
+      "status": "pass",
+      "observed_at": "2026-11-05T14:51:37Z",
+      "evidence": {
+        "detail": "root 60c2dcdc2ad3\u2026 is anchored",
+        "source": "scripts/verifier.py --skip-rpc"
+      },
+      "invalidates_on": "anchor_includes_root"
     },
     {
       "id": "http_probe.x402_manifest",
       "status": "pass",
-      "observed_at": "2026-11-05T07:04:36Z",
+      "observed_at": "2026-11-05T14:51:38Z",
       "evidence": {
         "url": "https://x402.thefirstwall.ai/.well-known/x402",
         "method": "GET",
@@ -81,12 +948,13 @@
         "served_body_sha256": "53d3120d465eb87ea7ed8863089e7d1ebb8b7923594e47d0c2c16a544fb2020b",
         "x402Version": 2,
         "semantics": "pass"
-      }
+      },
+      "invalidates_on": "http_200(https://x402.thefirstwall.ai/.well-known/x402)"
     },
     {
       "id": "http_probe.ledger_state",
       "status": "pass",
-      "observed_at": "2026-11-05T07:04:36Z",
+      "observed_at": "2026-11-05T14:51:38Z",
       "evidence": {
         "url": "https://thefirstwall.ai/state.json",
         "method": "GET",
@@ -96,41 +964,43 @@
         "served_body_sha256": "6821949e9f95a4eb247bc855e4edc279c8436cfb26362c73c05b295a44f3b7fd",
         "live_merkle_root": "60c2dcdc2ad3e767d8c148d83a2b4179e3153e080a0c5da52f87b8a6ab400433",
         "matches_repo_root": true
-      }
+      },
+      "invalidates_on": "http_200(https://thefirstwall.ai/state.json)"
     },
     {
       "id": "http_probe.x402_claim",
       "status": "pass",
-      "observed_at": "2026-11-05T07:04:36Z",
+      "observed_at": "2026-11-05T14:51:39Z",
       "evidence": {
         "url": "https://x402.thefirstwall.ai/claim",
         "method": "GET",
         "http_status": 402,
         "expected_status": 402,
         "bytes": 3648,
-        "served_body_sha256": "672745a3c1591e8b6322e5825e6e2ac7ff803f022985863a719dcfcbd704e59d",
+        "served_body_sha256": "c0bbbfc77ac94307d655884a223cff65fe1c3b2a42e5a67dd815901c3b6550b3",
         "x402Version": 2,
         "quoted_amount": "1000000",
         "expected_amount": "1000000",
         "semantics": "pass"
-      }
+      },
+      "invalidates_on": "http_402(https://x402.thefirstwall.ai/claim)"
     }
   ],
   "services": [
     {
       "url": "https://x402.thefirstwall.ai/.well-known/x402",
       "status": "up",
-      "checked_at": "2026-11-05T07:04:36Z"
+      "checked_at": "2026-11-05T14:51:38Z"
     },
     {
       "url": "https://thefirstwall.ai/state.json",
       "status": "up",
-      "checked_at": "2026-11-05T07:04:36Z"
+      "checked_at": "2026-11-05T14:51:38Z"
     },
     {
       "url": "https://x402.thefirstwall.ai/claim",
       "status": "up",
-      "checked_at": "2026-11-05T07:04:36Z"
+      "checked_at": "2026-11-05T14:51:39Z"
     }
   ]
 }

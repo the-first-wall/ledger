@@ -100,6 +100,82 @@ def pending_by_slot(base_dir: str) -> Dict[str, List[str]]:
     return out
 
 
+# --- The base-version precondition (B-61) -----------------------------------
+
+def slot_bundle(base_dir: str, slot_id: str) -> Optional[str]:
+    """The bundle hash of the block as committed at base_dir (dossier + icon),
+    or None when the block is not inscribed there."""
+    import claims  # noqa: E402  (same scripts dir; imported lazily to keep this module light)
+    path = os.path.join(core.ledger_w1_dir(base_dir), f"{slot_id}.json")
+    if not os.path.exists(path):
+        return None
+    dossier = core.load_json_strict(path)
+    icon_path = os.path.join(core.ledger_w1_dir(base_dir), f"{slot_id}.webp")
+    icon = None
+    if os.path.exists(icon_path):
+        with open(icon_path, "rb") as fh:
+            icon = fh.read()
+    return claims.bundle_sha256(dossier, icon)
+
+
+def precondition_problem(request: Dict[str, Any], current_bundle: Optional[str]) -> Optional[str]:
+    """None when the request's newest fee entry was authored against
+    `current_bundle` (the block as it is now), else the reason it cannot apply."""
+    fees = request.get("update_settlements")
+    entry = fees[-1] if isinstance(fees, list) and fees and isinstance(fees[-1], dict) else {}
+    prev = entry.get("prev_bundle_sha256")
+    if not prev:
+        return ("missing prev_bundle_sha256: a new update names the bundle hash of the block it was "
+                "authored against (scripts/record_update.py records it)")
+    if current_bundle is None:
+        return "the block it names is not inscribed"
+    if str(prev).lower() != current_bundle:
+        return (f"stale: authored against bundle {str(prev)[:16]}…, but the block is now "
+                f"{current_bundle[:16]}…; re-author the change on the current block and post a fresh request")
+    return None
+
+
+def head_bundle(dossier_path: str) -> Optional[str]:
+    """The bundle hash of the slot file at `dossier_path` (and its sibling .webp)
+    as the clone's HEAD has them: the version an owner's edit was authored
+    against. None outside a git checkout or when HEAD has no such slot."""
+    import subprocess
+    import claims  # noqa: E402
+
+    path = os.path.abspath(dossier_path)
+    d = os.path.dirname(path)
+
+    def show(p: str) -> Optional[bytes]:
+        try:
+            top = subprocess.run(["git", "-C", d, "rev-parse", "--show-toplevel"],
+                                 capture_output=True, text=True, check=False, timeout=10)
+            if top.returncode != 0:
+                return None
+            rel = os.path.relpath(os.path.realpath(p), os.path.realpath(top.stdout.strip()))
+            res = subprocess.run(["git", "-C", top.stdout.strip(), "show", f"HEAD:{rel.replace(os.sep, '/')}"],
+                                 capture_output=True, check=False, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return res.stdout if res.returncode == 0 else None
+
+    raw = show(path)
+    if raw is None:
+        return None
+    import json
+    dossier = json.loads(raw.decode("utf-8"), object_pairs_hook=core._reject_duplicate_keys)
+    return claims.bundle_sha256(dossier, show(os.path.splitext(path)[0] + ".webp"))
+
+
+def request_precondition_problem(base_dir: str, request: Dict[str, Any]) -> Optional[str]:
+    """precondition_problem against the block as committed at base_dir."""
+    slot_id = str(request.get("slot_id", ""))
+    try:
+        current = slot_bundle(base_dir, slot_id)
+    except (OSError, ValueError) as e:
+        return f"the block {slot_id} cannot be read: {e}"
+    return precondition_problem(request, current)
+
+
 # --- Applying a request ------------------------------------------------------
 
 def slot_targets(base_dir: str, slot_id: str) -> Dict[str, str]:
@@ -153,6 +229,11 @@ def write_derived(base_dir: str) -> None:
         with open(tmp, "w", encoding="utf-8") as fh:
             fh.write(core.render(obj))
         os.replace(tmp, path)
+    # The per-slot proofs + receipts, where this tree publishes them (the
+    # repository does; an overlay has no records/ and is not given one).
+    if os.path.isdir(os.path.join(base_dir, "records")):
+        import records  # noqa: E402  (same scripts dir)
+        records.write_records(base_dir)
 
 
 # --- The overlay: a request verified as the slot it would become ---------------

@@ -70,6 +70,8 @@ import ledger_core as core  # noqa: E402
 import content_safety as safety  # noqa: E402
 import claims  # noqa: E402
 import provenance  # noqa: E402
+import records  # noqa: E402
+import absence_certificate as absence  # noqa: E402
 import updates  # noqa: E402
 
 BASE_CHAIN_ID = 8453
@@ -113,6 +115,7 @@ ICON_FILE_RE = re.compile(r"^ledger/w1/(w1-b(?:\d{4}|10000))\.webp$")
 SOUL_FILE_RE = re.compile(r"^ledger/souls/(w1-b(?:\d{4}|10000))\.soul\.json$")
 CLAIM_FILE_RES = (claims.CLAIM_FILE_RE, claims.CLAIM_ICON_RE, claims.CLAIM_SOUL_RE)
 UPDATE_FILE_RES = updates.UPDATE_FILE_RES
+RECORD_FILE_RE = records.RECORD_FILE_RE
 # Files the generator rewrites whenever a slot lands or changes. Only the bot's
 # assignment and apply pull requests carry them; an owner's pull request never does.
 GENERATED_PATHS = {
@@ -321,7 +324,8 @@ def scope_of(entries: List[Tuple[str, str]]) -> Dict[str, Any]:
             allowed |= slot_paths_for(sid)
         for tx in claims_deleted:
             allowed |= claims.claim_paths_for(tx)
-        stray = sorted(p for p in paths if p not in allowed)
+        # The per-slot proofs (records/) are generated: an assignment moves every one of them.
+        stray = sorted(p for p in paths if p not in allowed and not RECORD_FILE_RE.match(p))
         if stray:
             raise ValueError(
                 "PR Boundary Violation: an assignment changes only the placed claims' files, the "
@@ -362,7 +366,7 @@ def scope_of(entries: List[Tuple[str, str]]) -> Dict[str, Any]:
             allowed |= slot_paths_for(sid)
         for tx in updates_deleted:
             allowed |= updates.update_paths_for(tx)
-        stray = sorted(p for p in paths if p not in allowed)
+        stray = sorted(p for p in paths if p not in allowed and not RECORD_FILE_RE.match(p))
         if stray:
             raise ValueError(
                 "PR Boundary Violation: an apply changes only the applied requests' files, the changed "
@@ -626,6 +630,8 @@ def verify_ownership_lineage(slot_id: str, new_data: dict, ledger_dir: str,
 LIVING_FIELDS = {
     "agent_urls", "status", "retirement", "covenants",
     "high_res_crest_url", "timestamp_verified",
+    # Liveness (P-64): the owner may change the cadence, and every witnessed event moves the witness.
+    "expected_heartbeat", "last_witnessed_at",
 }
 # Arrays that may only grow; existing entries are byte-for-byte preserved.
 APPEND_ONLY_FIELDS = {"supersessions", "ownership_lineage", "boundary_events", "update_settlements", "evidence"}
@@ -1445,7 +1451,8 @@ def verify_provenance(base_dir: str, log: "CheckLog") -> None:
     except ValueError as e:
         log.record("skill.signature", "FAIL", str(e))
     log.guard("permissions.manifest",
-              lambda: provenance.check_permissions(base_dir, state, sorted(GENERATED_PATHS)))
+              lambda: provenance.check_permissions(base_dir, state, sorted(GENERATED_PATHS) + [
+                  "records/w1-b0001.proof.json", "absent/0x0000000000000000000000000000000000000000.json"]))
     log.guard("discovery.hashes", lambda: provenance.check_discovery(base_dir, state))
 
 
@@ -1768,6 +1775,90 @@ def verify_update_settlements(slot_id: str, new_data: dict, prev_data: Optional[
                 "not authorship)."
             )
     return f"{expected_kind} fee {float(entry.get('amount_usdc', 0)):.2f} USDC (owed {price:.2f} USDC)"
+
+
+def verify_update_precondition(slot_id: str, new_data: dict, prev_data: Optional[dict],
+                               prev_icon: Optional[bytes], touched: bool) -> str:
+    """The base-version precondition (B-61). A change appended to an inscribed
+    block names, in its new update_settlements entry, `prev_bundle_sha256`: the
+    bundle hash of the block it was authored against. It must be the bundle hash
+    of the block as the base branch has it (dossier + icon), so an update written
+    against an older version — another change landed in between — is rejected,
+    never silently merged over that change.
+
+    Legacy entries (sealed before the rule) carry no precondition and are never
+    re-checked: only the entry this change appends is held to it. The field is
+    part of the new bundle, so the owner's update_signature binds it."""
+    fees = new_data.get("update_settlements") or []
+    if prev_data is None or not touched:
+        n = sum(1 for e in fees if isinstance(e, dict) and e.get("prev_bundle_sha256"))
+        return (f"{n} fee entr{'y' if n == 1 else 'ies'} carry a precondition" if n
+                else "no new update to check")
+    prev_fees = prev_data.get("update_settlements") or []
+    if len(fees) <= len(prev_fees) or not isinstance(fees[-1], dict):
+        return "no new update to check"  # verify_update_settlements rejects the missing fee
+    entry = fees[-1]
+    recorded = entry.get("prev_bundle_sha256")
+    if not recorded:
+        raise ValueError(
+            f"Update Precondition Violation: update_settlements[{len(fees) - 1}] is missing "
+            "prev_bundle_sha256, the bundle hash of the block this change was authored against. It is "
+            "optional only on legacy entries; every new update names its base version "
+            "(scripts/record_update.py records it, scripts/sign_update.py signs it)."
+        )
+    actual = claims.bundle_sha256(prev_data, prev_icon)
+    if str(recorded).lower() != actual:
+        raise ValueError(
+            f"Update Precondition Violation: stale update. update_settlements[{len(fees) - 1}] was "
+            f"authored against bundle {str(recorded)[:16]}…, but {slot_id} is now {actual[:16]}… on the "
+            "base branch: another change landed first. Re-author the change on the current block."
+        )
+    return f"authored against the current block ({actual[:12]}…)"
+
+
+DERIVED_LIVENESS_FIELDS = ("absent_since", "absent_after")
+
+
+def verify_liveness(slot_id: str, data: dict, as_of: str) -> str:
+    """Liveness (P-64). An inscription may declare expected_heartbeat (P<n>D) and
+    last_witnessed_at, as a pair. The witness must be one of the dossier's own
+    attested timestamps (timestamp_verified or an update fee's `at`): a signed or
+    paid event, never a typed-in date. absent_since is DERIVED by rule from the two
+    and the ledger's clock (ledger_core.liveness) and is never set by a claim or
+    an update: a dossier that carries it is rejected."""
+    present = [f for f in DERIVED_LIVENESS_FIELDS if f in data]
+    if present:
+        raise ValueError(
+            f"Liveness Violation: {present} is derived by rule (last_witnessed_at + expected_heartbeat "
+            "against the ledger's clock) and published in records/<slot>.proof.json; a dossier never "
+            "sets it."
+        )
+    hb, seen = data.get("expected_heartbeat"), data.get("last_witnessed_at")
+    if hb is None and seen is None:
+        return "no heartbeat declared"
+    if hb is None or seen is None:
+        raise ValueError("Liveness Violation: expected_heartbeat and last_witnessed_at come as a pair.")
+    try:
+        core.heartbeat_days(hb)
+        witnessed = core._parse_ts(seen)
+    except ValueError as e:
+        raise ValueError(f"Liveness Violation: {e}")
+    attested = []
+    for t in core.attested_timestamps(data):
+        try:
+            attested.append(core._parse_ts(t))
+        except ValueError:
+            continue
+    if witnessed not in attested:
+        raise ValueError(
+            f"Liveness Violation: last_witnessed_at {seen} is not one of the dossier's attested "
+            "timestamps (timestamp_verified or an update_settlements[].at); a witness is a signed or "
+            "paid event."
+        )
+    live = core.liveness(data, as_of)
+    if live["absent_since"]:
+        return f"heartbeat {hb}: ABSENT since {live['absent_since']} (last witnessed {seen}, as of {as_of})"
+    return f"heartbeat {hb}: present (last witnessed {seen}; absent after {live['absent_after']})"
 
 
 def verify_update_signatures(slot_id: str, data: dict, icon_bytes: Optional[bytes] = None) -> str:
@@ -2249,6 +2340,7 @@ def run_verification(base_dir: str, *, skip_rpc: bool = False, rpc_scope: str = 
         except Exception as e:  # noqa: BLE001
             log.record("rpc.head_block", "FAIL", f"could not read chain head: {e}")
 
+    ledger_as_of = core.ledger_clock(base_dir)
     for s_file in slots:
         if only_slots is not None and s_file[:-5] not in only_slots:
             continue
@@ -2320,9 +2412,14 @@ def run_verification(base_dir: str, *, skip_rpc: bool = False, rpc_scope: str = 
         log.guard(slot_id + ".ownership_chain", lambda d=data: claims.verify_lineage_chain(d))
         log.guard(slot_id + ".update_settlements",
                   lambda s=slot_id, d=data, p=prev: verify_update_settlements(s, d, p, s in touched))
+        log.guard(slot_id + ".update_precondition",
+                  lambda s=slot_id, d=data, p=prev, pi=prev_icon:
+                  verify_update_precondition(s, d, p, pi, s in touched))
         log.guard(slot_id + ".update_signature",
                   lambda s=slot_id, d=data, ic=new_icon: verify_update_signatures(s, d, ic))
 
+        log.guard(slot_id + ".liveness",
+                  lambda s=slot_id, d=data: verify_liveness(s, d, ledger_as_of))
         log.guard(slot_id + ".icon_structure",
                   lambda p=icon_path: verify_icon(p))
 
@@ -2534,6 +2631,14 @@ def run_verification(base_dir: str, *, skip_rpc: bool = False, rpc_scope: str = 
                                "bot cannot apply it; post a fresh one and have this one withdrawn")
             except ValueError:
                 pass
+            # B-61: the request names the block version it was authored against.
+            stale = updates.request_precondition_problem(base_dir, request)
+            if stale:
+                log.record(tag + ".precondition", "FAIL" if tx in scope["updates"] else "WARN",
+                           f"{request.get('slot_id')}: {stale}")
+            else:
+                log.record(tag + ".precondition", "PASS",
+                           f"authored against the current {request.get('slot_id')}")
 
     # --- The apply: pending requests became slot changes ---------------------
     if scope["kind"] == "apply":
@@ -2550,6 +2655,16 @@ def run_verification(base_dir: str, *, skip_rpc: bool = False, rpc_scope: str = 
               lambda: verify_state_files(base_dir) or
               "state.json, index.json & settlements.json match derivation")
     log.guard("state.last_updated", lambda: verify_last_updated(base_dir))
+    log.guard("records.proofs", lambda: records.verify_records(base_dir))
+    # Absence certificates (signed negative proofs): current ones must hold at the
+    # current root; one for an older anchored root is a dated, superseded statement.
+    for rel in absence.certificate_files(base_dir):
+        tag = "absent." + os.path.basename(rel)[:-5]
+        try:
+            status, detail = absence.verify_certificate(base_dir, rel)
+            log.record(tag, "PASS" if status == "current" else "WARN", detail)
+        except (ValueError, OSError) as e:
+            log.record(tag, "FAIL", str(e))
     verify_provenance(base_dir, log)
 
     # Identity: the ERC-8004 holder and tokenURI are mutable, so check the chain.

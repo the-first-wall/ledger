@@ -82,8 +82,9 @@
     "x402_claim": "https://x402.thefirstwall.ai/claim",
     "ledger_repo": "https://github.com/the-first-wall/ledger"
   },
-  "skill_version": "1.3.0",
-  "skill_sha256": "8c208807e91955526e4f817084074bd3c7370ad76c8246a0a3f760614ebfc51b",
+  "x402_claim": "https://x402.thefirstwall.ai/claim",
+  "skill_version": "1.3.1",
+  "skill_sha256": "5c75fc1293b1f518bab7a9961c738e493d3bbbaa562cc05db112165ead05e9c9",
   "discovery": {
     "agent_registration_sha256": "873754792f0d5910afd7a9adc7f5501f29b9c7446f46040374b9f8c47bab2bec",
     "agent_card_sha256": "5432c9474f615f9cf3553736821d59df937c3534e4b19d15b9ae60e2f5f3525c",

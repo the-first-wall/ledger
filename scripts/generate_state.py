@@ -3,9 +3,10 @@
 The First Wall — Deterministic State Generator
 ==============================================
 
-Regenerates `state.json`, `ledger/index.json`, `ledger/settlements.json` and
-the canvas composite `canvas/wall_01_composite.webp` from the ledger's files via
-`ledger_core`. This is the *only* sanctioned way to produce those files — never
+Regenerates `state.json`, `ledger/index.json`, `ledger/settlements.json`, the
+per-slot inclusion proofs + receipts `records/<slot>.proof.json` (P-55,
+scripts/records.py) and the canvas composite `canvas/wall_01_composite.webp`
+from the ledger's files via `ledger_core`. This is the *only* sanctioned way to produce those files — never
 hand-edit them.
 
 Usage:
@@ -25,6 +26,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ledger_core as core  # noqa: E402
+import records  # noqa: E402
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 STATE_PATH = os.path.join(BASE_DIR, "state.json")
@@ -104,6 +106,8 @@ def generate() -> None:
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(rendered)
         print(f"[✓] wrote {os.path.relpath(path, BASE_DIR)}")
+    written = records.write_records(BASE_DIR)
+    print(f"[✓] wrote {len(written)} record(s) in records/ (inclusion proof + receipt)")
     write_composite()
 
 
@@ -119,6 +123,11 @@ def check() -> int:
             drifted.append(rel)
         else:
             print(f"[✓] {rel} is up to date")
+    record_problems = records.drift(BASE_DIR)
+    if record_problems:
+        drifted.append("records/ (" + "; ".join(record_problems[:3]) + ")")
+    else:
+        print(f"[✓] records/ holds {len(records.build_records(BASE_DIR))} up-to-date proof(s) + receipt(s)")
     reason = composite_drift()
     if reason:
         drifted.append(f"canvas/wall_01_composite.webp ({reason})")
@@ -129,7 +138,7 @@ def check() -> int:
         print("    The committed file does not match the ledger content.")
         print("    Run `python scripts/generate_state.py` and commit the result.")
         return 1
-    print("\n[✓] state.json, ledger/index.json, ledger/settlements.json and the canvas composite match the ledger. No drift.")
+    print("\n[✓] state.json, ledger/index.json, ledger/settlements.json, records/ and the canvas composite match the ledger. No drift.")
     return 0
 
 

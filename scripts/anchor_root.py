@@ -235,6 +235,11 @@ def do_send(state: Dict[str, Any], key: str, wait: bool) -> int:
     })
     save_anchors(anchors)
     print(f"[✓] Appended anchor record to {os.path.relpath(ANCHORS_PATH, BASE_DIR)}")
+    # P-55: every record's receipt names the anchoring tx (and liveness reads the
+    # ledger clock, which the anchor moves), so the records follow the anchor.
+    import records  # noqa: E402  (same scripts dir)
+    written = records.write_records(BASE_DIR)
+    print(f"[✓] Regenerated {len(written)} record(s) in records/ with the anchor receipt")
     return 0
 
 

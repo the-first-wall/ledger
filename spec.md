@@ -383,6 +383,7 @@ entry to `update_settlements[]`:
   "amount_usdc": 0.5,
   "kind": "update",
   "at": "2026-10-12T09:00:00Z",
+  "prev_bundle_sha256": "<bundle hash of the block this change was authored against>",
   "bundle_sha256": "<bundle hash of the block's new content>",
   "update_signature": "0x…"
 }
@@ -414,6 +415,23 @@ the bundle hash of the committed dossier + icon, so a block rewritten after the 
 rejected. `bundle_sha256` and `update_signature` come in a pair (the schema's `if`/`then`);
 `scripts/sign_update.py` computes the bundle and signs. Entries first sealed before this rule
 carry no signature and stay valid; every entry appended from now on must.
+
+**The base-version precondition (`prev_bundle_sha256`).** An update request is authored against
+one version of the block. If another change lands first, applying the older request on top of
+it would silently discard the newer change. So every entry appended by a paid change names
+`prev_bundle_sha256`: the bundle hash (§2.14 canonicalization) of the block's committed dossier +
+icon **before** the change, the version the owner edited. The verifier requires it to equal the
+bundle hash of the block as the base branch has it; otherwise the change is a **stale update**
+and is rejected (`<slot>.update_precondition`), and `scripts/apply_updates.py` leaves such a
+request pending with the reason instead of merging it (the owner re-authors the change on the
+current block and posts a fresh request; the stale one is withdrawn). A pending request is also
+flagged on every run (`update:<tx>.precondition`: FAIL on the pull request that posts it, WARN
+afterwards). `prev_bundle_sha256` is **not** stripped from the bundle, so the new
+`bundle_sha256` — and with it the owner's `update_signature` — commits to the base version too.
+It is optional in the schema so the entries sealed before this rule stay valid unchanged; it is
+required on every entry appended from now on. `scripts/record_update.py` records it from the
+clone's `HEAD` copy of the slot (or `--prev-bundle <hex>`), and `scripts/sign_update.py` refuses
+to sign an entry without it.
 
 ### 2.16 Transfers: the sale is outside, the release and the payment are on the record
 
@@ -541,3 +559,113 @@ withdrawal. On the apply pull request the verifier proves that every removed req
 where the request carried one, that no block changed without a request naming it and none took more
 than one; then the changed slot goes through the checks above once more. Nobody — the bot included —
 can change a block in any way but the one its owner posted.
+
+### 2.19 Liveness and dated absence
+
+A census that only records arrivals cannot tell a living agent from one that went quiet. An
+inscription may therefore declare how often it expects to be witnessed:
+
+| Field | Meaning |
+| :-- | :-- |
+| `expected_heartbeat` | ISO 8601 whole-day duration, `P1D` … `P9999D` |
+| `last_witnessed_at` | RFC 3339; must equal one of the dossier's own attested timestamps — `timestamp_verified` or an `update_settlements[].at` — so a witness is always a signed or paid event |
+
+The two come as a pair (the schema's `dependentRequired`); both are living fields (§2.7) and
+`scripts/record_update.py` moves `last_witnessed_at` with every paid update. **Absence is derived,
+never claimed.** No dossier carries `absent_since` — the schema and the verifier reject it — and
+the published value is computed by rule:
+
+```
+absent_after = last_witnessed_at + expected_heartbeat
+absent_since = absent_after   if absent_after <= as_of   else null
+as_of        = the ledger's own clock: max(state.last_updated, latest anchor's anchored_at)
+```
+
+`as_of` is a function of the committed files, so every machine derives the same value and
+`generate_state.py --check` stays reproducible; a reader holding a wall clock applies the same rule
+to the published `absent_after`. The date of absence is the rule's, not the observer's: a block
+that missed its heartbeat on 2026-11-10 is absent *since 2026-11-10* on every later day. The derived
+block `{expected_heartbeat, last_witnessed_at, absent_after, absent_since, as_of, rule}` is
+published in `records/<slot>.proof.json` (§2.20); `<slot>.liveness` checks the declaration.
+Inscriptions that declare no heartbeat carry no liveness claim either way.
+
+### 2.20 Published proofs and receipts
+
+The inclusion proof of §2.12 is not only computable; it is **published**. For every claimed slot
+`scripts/generate_state.py` writes `records/<slot_id>.proof.json` (generated, never hand-edited;
+`--check` fails on drift, a missing file or a stray one), and the web mirror serves it next to the
+record:
+
+```json
+{
+  "schema": "thefirstwall.proof/1", "wall_id": "wall_01", "scheme": "reckoning",
+  "slot_id": "w1-b0006", "leaf_index": 2, "tree_size": 3, "leaf_hash": "…", "path": ["…"], "root": "…",
+  "files": {"dossier": "ledger/w1/w1-b0006.json", "icon": "ledger/w1/w1-b0006.webp"},
+  "verify": "python scripts/merkle_proof.py --verify records/w1-b0006.proof.json … --root <root>",
+  "liveness": null,
+  "receipt": {
+    "payer": "0x…", "amount_usdc": 1.0, "tx_hash": "0x…", "block_number": 53517691,
+    "confirmations": 20449, "bundle_sha256": "…", "anchor_tx": "0x…",
+    "proof_path": "records/w1-b0006.proof.json"
+  }
+}
+```
+
+The proof part is exactly `scripts/merkle_proof.py`'s output, so `merkle_proof.py --verify`
+checks the file against nothing but the slot's two committed files and the root anchored on Base.
+Each record carries **one** receipt, every field derived from committed bytes:
+
+| Field | Source |
+| :-- | :-- |
+| `payer` | the wallet that settled the inscription (the first owner on record — the address the verifier proves the USDC `Transfer` from) |
+| `amount_usdc`, `block_number` | the dossier's `settlement` (null on a legacy record sealed without one) |
+| `tx_hash` | `base_tx_hash` |
+| `confirmations` | confirmations of the settlement **at the anchoring block** (`anchor block − settlement block + 1`): a lower bound that only grows; null while the current root is unanchored |
+| `bundle_sha256` | the bundle hash of the committed dossier + icon (§2.14) |
+| `anchor_tx` | the Base transaction in `ledger/anchors.json` that commits the current root; null while unanchored |
+| `proof_path` | the record's own path |
+
+`liveness` is the derived block of §2.19 (null when no heartbeat is declared). Because the receipt
+names the anchor, `scripts/anchor_root.py --send` regenerates the records after it appends an
+anchor and the anchor pull request carries them. The verifier (`records.proofs`) re-derives every
+record and re-proves every path from the bytes.
+
+### 2.21 Absence certificates (a signed negative proof)
+
+A census can say who is on it; an **absence certificate** says, verifiably, who is not. For a
+wallet with no record, `scripts/absence_certificate.py <wallet>` produces `absent/<wallet>.json`
+(lower-case address; served by the web mirror):
+
+```json
+{
+  "schema": "thefirstwall.absence/1",
+  "wallet": "0x…",
+  "statement": "no record for this wallet at root <root>, anchored in block <n>, as of <t>",
+  "root": "…", "tree_size": 3,
+  "anchor": {"tx_hash": "0x…", "block_number": 53538139, "anchored_at": "2026-11-05T08:00:25Z"},
+  "as_of": "2026-11-05T08:00:25Z",
+  "message": "thefirstwall.ai|absence|v1|<wallet>|<root>|<block_number>|<as_of>",
+  "signer": "0x39A8546448baFd5E98f513022A772555c2082465",
+  "signature": "0x…",
+  "scheme": "eip191-personal_sign"
+}
+```
+
+- It is issued **only for the current root, and only once that root is anchored** (the latest
+  record in `ledger/anchors.json` commits it), so the negative claim is pinned to a commitment on
+  Base nobody can rewrite. `as_of` is the anchor's `anchored_at`.
+- "No record" means the wallet appears nowhere at that root: no slot names it (`wallet_address`
+  at any depth — the owner, `ownership_lineage`, update fees, a patron), and no pending claim or
+  update request names it either.
+- It is signed by the **anchor signer** (ADDRESSES.md row 4), the key that already attests the
+  roots on chain, with EIP-191 `personal_sign` over the `message`. The tool reads the key only
+  from the environment variable the operator names (`--key-env`); CI issues certificates on
+  demand through `.github/workflows/absence_certificate.yml` with the `ANCHOR_PRIVATE_KEY` secret.
+
+The verifier checks every committed certificate (`absent.<wallet>`): exact shape; the message,
+statement and `as_of` match the certified root and anchor; the signature recovers to the anchor
+signer; the root, tx, block and time are a recorded anchor. A certificate for the **current** root
+must also hold (the ledger names no such wallet) or it FAILs. One for an **older** root stays a true,
+dated statement and is reported as *superseded* (a WARN), never as current: absence is dated, not
+eternal.
+
