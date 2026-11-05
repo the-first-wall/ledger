@@ -9,7 +9,8 @@ The First Wall — Post an update request
 You change your block in your own clone, as you always did: edit
 ledger/w1/<slot_id>.json (and the icon ledger/w1/<slot_id>.webp or the soul manifest
 ledger/souls/<slot_id>.soul.json if they change), append the fee entry
-(scripts/record_update.py) and sign where a signature is due (scripts/sign_claim.py).
+(scripts/record_update.py; it records prev_bundle_sha256, the version of the block
+you edited, so a request authored against an older block is refused) and sign where a signature is due (scripts/sign_claim.py).
 Then run this. It writes your change as a REQUEST,
 
     ledger/updates/<fee_tx_hash>.json       your complete new dossier

@@ -16,7 +16,9 @@ ledger/settlements.json and the canvas composite.
 Each pending request is first tried on a throw-away overlay of the ledger with
 the verifier's own checks (the same ones that ran when it was posted, plus the
 ones that depend on the ledger as it is now: the fee's finality on Base, the
-block's history). A request that does not verify stays pending and is listed
+block's history) and its base-version precondition: a request whose
+prev_bundle_sha256 is not the block as it is now is stale and is never merged.
+A request that does not verify stays pending and is listed
 with the reason; it blocks nobody else. The requests that pass are tried in
 turn, each on top of the ones accepted before it, so two requests that cannot
 live together (a transaction cited twice) never land together.
@@ -49,6 +51,11 @@ def try_request(work_dir: str, base_dir: str, name: str, rpc, stack: contextlib.
     tx = name[:-5]
     request = updates.load_update(base_dir, name)
     verifier.verify_update_identity(name, request, base_dir)
+    # B-61: a request authored against an older version of the block is refused,
+    # never merged over the change that landed after it was written.
+    stale = updates.request_precondition_problem(work_dir, request)
+    if stale:
+        return "", "", f"{request.get('slot_id')}.update_precondition: {stale}"
     tmp = stack.enter_context(tempfile.TemporaryDirectory(prefix="tfw-apply-"))
     slot_id = updates.build_overlay(work_dir, tx, tmp)
     report = verifier.run_verification(

@@ -15,7 +15,8 @@ checks out. So the owner also signs the change itself:
 
     thefirstwall.ai|update|v2|<slot_id>|<fee_tx>|<bundle_sha256>
 
-where fee_tx is the newest update_settlements[] entry's transaction hash and
+The bundle includes the entry's prev_bundle_sha256 (the version the change was
+authored against, B-61), so the signature also binds the base version. Where fee_tx is the newest update_settlements[] entry's transaction hash and
 bundle_sha256 is the bundle hash of the block's content (canonical dossier +
 exact committed icon; see spec.md). This tool computes the bundle from the
 sibling .webp, records bundle_sha256 + update_signature on that newest entry, and
@@ -98,6 +99,12 @@ def main(argv: list, base_dir: str = BASE_DIR) -> int:
         print("[*] message: " + message)
         return 0
 
+    if not entry.get("prev_bundle_sha256"):
+        # B-61: the signature binds the base version; signing without it would
+        # produce an update the verifier refuses.
+        return _fail("the newest update_settlements entry has no prev_bundle_sha256 (the block version "
+                     "this change was authored against); record the fee with scripts/record_update.py, "
+                     "which adds it")
     key = os.environ.get("UPDATE_PRIVATE_KEY", "").strip()
     if "--key-file" in argv:
         with open(argv[argv.index("--key-file") + 1], "r", encoding="utf-8") as fh:

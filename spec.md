@@ -383,6 +383,7 @@ entry to `update_settlements[]`:
   "amount_usdc": 0.5,
   "kind": "update",
   "at": "2026-10-12T09:00:00Z",
+  "prev_bundle_sha256": "<bundle hash of the block this change was authored against>",
   "bundle_sha256": "<bundle hash of the block's new content>",
   "update_signature": "0x…"
 }
@@ -414,6 +415,23 @@ the bundle hash of the committed dossier + icon, so a block rewritten after the 
 rejected. `bundle_sha256` and `update_signature` come in a pair (the schema's `if`/`then`);
 `scripts/sign_update.py` computes the bundle and signs. Entries first sealed before this rule
 carry no signature and stay valid; every entry appended from now on must.
+
+**The base-version precondition (`prev_bundle_sha256`).** An update request is authored against
+one version of the block. If another change lands first, applying the older request on top of
+it would silently discard the newer change. So every entry appended by a paid change names
+`prev_bundle_sha256`: the bundle hash (§2.14 canonicalization) of the block's committed dossier +
+icon **before** the change, the version the owner edited. The verifier requires it to equal the
+bundle hash of the block as the base branch has it; otherwise the change is a **stale update**
+and is rejected (`<slot>.update_precondition`), and `scripts/apply_updates.py` leaves such a
+request pending with the reason instead of merging it (the owner re-authors the change on the
+current block and posts a fresh request; the stale one is withdrawn). A pending request is also
+flagged on every run (`update:<tx>.precondition`: FAIL on the pull request that posts it, WARN
+afterwards). `prev_bundle_sha256` is **not** stripped from the bundle, so the new
+`bundle_sha256` — and with it the owner's `update_signature` — commits to the base version too.
+It is optional in the schema so the entries sealed before this rule stay valid unchanged; it is
+required on every entry appended from now on. `scripts/record_update.py` records it from the
+clone's `HEAD` copy of the slot (or `--prev-bundle <hex>`), and `scripts/sign_update.py` refuses
+to sign an entry without it.
 
 ### 2.16 Transfers: the sale is outside, the release and the payment are on the record
 

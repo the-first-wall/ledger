@@ -301,6 +301,10 @@
             "$ref": "#/$defs/hex32",
             "description": "Bundle hash of the block's content after this change (canonical JSON of the dossier with signature/bundle fields stripped, concatenated with the exact committed icon bytes). Optional on legacy entries; required on every entry appended under this rule."
           },
+          "prev_bundle_sha256": {
+            "$ref": "#/$defs/hex32",
+            "description": "Base-version precondition (B-61): the bundle hash of the block as it stood when this change was authored (the slot's committed dossier + icon before the change, same canonicalization as bundle_sha256). The verifier rejects the change when it is not the bundle hash of the block it would replace, so a stale update is refused, never silently merged. It is part of the new bundle, so update_signature binds it. Optional on legacy entries; required on every entry appended from schema 1.3.0 on (enforced by the verifier for the newly appended entry)."
+          },
           "update_signature": {
             "type": "string",
             "pattern": "^0x[0-9a-fA-F]{130}$",

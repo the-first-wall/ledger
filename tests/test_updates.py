@@ -36,6 +36,7 @@ import ledger_core as core  # noqa: E402
 import record_update  # noqa: E402
 import sign_transfer  # noqa: E402
 import sign_update  # noqa: E402
+import updates  # noqa: E402
 import verifier  # noqa: E402
 from test_verifier_units import identity_eth_call  # noqa: E402
 
@@ -368,6 +369,11 @@ class UpdateFeeTests(unittest.TestCase):
             key = os.path.join(td, "key.txt")
             with open(key, "w") as fh:
                 fh.write(SELLER_KEY)
+            # B-61: no base version on the entry, no signature (the verifier would refuse it).
+            self.assertEqual(sign_update.main([path, "--key-file", key, "--write"]), 2)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(core.render(dict(inscribed(), update_settlements=[
+                    dict(fee(), prev_bundle_sha256="ab" * 32)])))
             self.assertEqual(sign_update.main([path, "--print-message"]), 0)
             self.assertEqual(sign_update.main([path, "--verify"]), 1)      # not signed yet
             self.assertEqual(sign_update.main([path, "--key-file", key, "--write"]), 0)
@@ -382,23 +388,109 @@ class UpdateFeeTests(unittest.TestCase):
             with open(path, "w", encoding="utf-8") as fh:
                 fh.write(core.render(inscribed()))
             rpc = FakeRpc().settle(TX_FEE1, SELLER, USDC // 2)
-            self.assertEqual(record_update.main([path, TX_FEE1, "--at", "2026-10-12T09:00:00Z", "--write"], rpc=rpc), 0)
-            self.assertEqual(record_update.main([path, TX_FEE1, "--write"], rpc=rpc), 0)  # idempotent
+            # B-61: outside a git checkout the base version must be given.
+            self.assertEqual(record_update.main([path, TX_FEE1, "--write"], rpc=rpc), 2)
+            self.assertNotIn("update_settlements", core.load_json_strict(path))
+            pb = ["--prev-bundle", "ab" * 32]
+            self.assertEqual(record_update.main([path, TX_FEE1, "--at", "2026-10-12T09:00:00Z", "--write"] + pb,
+                                                rpc=rpc), 0)
+            self.assertEqual(record_update.main([path, TX_FEE1, "--write"] + pb, rpc=rpc), 0)  # idempotent
             d = core.load_json_strict(path)
-            self.assertEqual(d["update_settlements"], [fee()])
+            self.assertEqual(d["update_settlements"], [dict(fee(), prev_bundle_sha256="ab" * 32)])
             verifier.validate_dossier(d)
             # Below the update price: refused before anything is written.
             rpc.settle(TX_FEE2, SELLER, USDC // 4)
-            self.assertEqual(record_update.main([path, TX_FEE2, "--write"], rpc=rpc), 1)
+            self.assertEqual(record_update.main([path, TX_FEE2, "--write"] + pb, rpc=rpc), 1)
             self.assertEqual(len(core.load_json_strict(path)["update_settlements"]), 1)
             # A transfer fee is 5.00 USDC: an update fee's worth is refused for --kind transfer.
             tx3 = "0x" + "f3" * 32
             rpc.settle(tx3, SELLER, 2 * USDC)
-            self.assertEqual(record_update.main([path, tx3, "--kind", "transfer", "--write"], rpc=rpc), 1)
+            self.assertEqual(record_update.main([path, tx3, "--kind", "transfer", "--write"] + pb, rpc=rpc), 1)
             rpc.settle(tx3, SELLER, 5 * USDC)
-            self.assertEqual(record_update.main([path, tx3, "--kind", "transfer", "--write"], rpc=rpc), 0)
+            self.assertEqual(record_update.main([path, tx3, "--kind", "transfer", "--write"] + pb, rpc=rpc), 0)
             self.assertEqual(core.load_json_strict(path)["update_settlements"][-1]["amount_usdc"], 5.0)
             self.assertEqual(record_update.main(["--price"]), 0)
+
+    def test_record_update_reads_the_base_version_from_head(self):
+        """In a clone, prev_bundle_sha256 is the slot as HEAD has it: the version the owner edited."""
+        import subprocess
+        with tempfile.TemporaryDirectory() as td:
+            w1 = os.path.join(td, "ledger", "w1")
+            os.makedirs(w1)
+            path = os.path.join(w1, "w1-b0042.json")
+            base = inscribed()
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(core.render(base))
+            with open(os.path.join(w1, "w1-b0042.webp"), "wb") as fh:
+                fh.write(b"base-icon")
+            git = ["git", "-C", td, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
+            subprocess.run(git[:3] + ["init", "-q"], check=True)
+            subprocess.run(git + ["add", "-A"], check=True)
+            subprocess.run(git + ["commit", "-qm", "base"], check=True)
+            # The owner edits the block, then records the fee.
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(core.render(dict(base, agent_urls={"home": "https://example.com"})))
+            rpc = FakeRpc().settle(TX_FEE1, SELLER, USDC // 2)
+            self.assertEqual(record_update.main([path, TX_FEE1, "--write"], rpc=rpc), 0)
+            entry = core.load_json_strict(path)["update_settlements"][-1]
+            self.assertEqual(entry["prev_bundle_sha256"], claims.bundle_sha256(base, b"base-icon"))
+
+
+class UpdatePreconditionUnitTests(unittest.TestCase):
+    """B-61: a new update names the block version it was authored against."""
+
+    def setUp(self):
+        self.prev = inscribed()
+        self.icon = b"icon"
+        self.base = claims.bundle_sha256(self.prev, self.icon)
+
+    def check(self, new, prev=None, touched=True):
+        return verifier.verify_update_precondition("w1-b0042", new, self.prev if prev is None else prev,
+                                                   self.icon, touched)
+
+    def test_a_new_update_against_the_current_block_passes(self):
+        new = dict(self.prev, update_settlements=[dict(fee(), prev_bundle_sha256=self.base)])
+        self.assertIn("authored against the current block", self.check(new))
+
+    def test_a_new_update_without_a_precondition_is_refused(self):
+        new = dict(self.prev, update_settlements=[fee()])
+        with self.assertRaisesRegex(ValueError, "missing prev_bundle_sha256"):
+            self.check(new)
+
+    def test_a_stale_update_is_refused_not_merged(self):
+        new = dict(self.prev, update_settlements=[dict(fee(), prev_bundle_sha256="ab" * 32)])
+        with self.assertRaisesRegex(ValueError, "stale update"):
+            self.check(new)
+
+    def test_legacy_entries_without_the_field_stay_valid(self):
+        legacy = dict(self.prev, update_settlements=[fee()])           # sealed before the rule
+        self.assertEqual(self.check(legacy, prev=legacy), "no new update to check")
+        self.assertEqual(self.check(legacy, touched=False), "no new update to check")
+        # A new update on top of a legacy history needs it only on the new entry.
+        new = dict(legacy, update_settlements=[fee(), dict(fee(tx=TX_FEE2),
+                   prev_bundle_sha256=claims.bundle_sha256(legacy, self.icon))])
+        self.assertIn("current block", self.check(new, prev=legacy))
+
+    def test_schema_accepts_the_field_and_keeps_it_optional(self):
+        verifier.validate_dossier(dict(self.prev, update_settlements=[fee()]))
+        verifier.validate_dossier(dict(self.prev, update_settlements=[dict(fee(), prev_bundle_sha256=self.base)]))
+        with self.assertRaises(ValueError):
+            verifier.validate_dossier(dict(self.prev, update_settlements=[dict(fee(), prev_bundle_sha256="xyz")]))
+
+    def test_the_owner_signature_binds_the_precondition(self):
+        entry = dict(fee(), prev_bundle_sha256=self.base)
+        a = claims.bundle_sha256(dict(self.prev, update_settlements=[entry]), self.icon)
+        b = claims.bundle_sha256(dict(self.prev, update_settlements=[dict(entry, prev_bundle_sha256="ab" * 32)]),
+                                 self.icon)
+        self.assertNotEqual(a, b)
+
+    def test_committed_ledger_entries_are_legacy_and_pass(self):
+        for name in sorted(os.listdir(os.path.join(REPO, "ledger", "w1"))):
+            if name.endswith(".json"):
+                d = core.load_json_strict(os.path.join(REPO, "ledger", "w1", name))
+                verifier.validate_dossier(d)
+                self.assertEqual(verifier.verify_update_precondition(d["slot_id"], d, d, None, False),
+                                 "no new update to check")
 
 
 # --------------------------------------------------------------------------- #
@@ -703,15 +795,18 @@ class UpdateLedgerTests(unittest.TestCase):
         with open(os.path.join(self.w1, "w1-b0042.json"), "w", encoding="utf-8") as fh:
             fh.write(core.render(d))
         self._generate()
+        # The block as main has it: what a new update names as its base version (B-61).
+        self.base_bundle = updates.slot_bundle(self.td, "w1-b0042")
         return d
 
-    def _stamp(self, key):
+    def _stamp(self, key, prev_bundle=None):
         """Sign the newest fee entry with the exact icon bytes committed on disk."""
         path = os.path.join(self.w1, "w1-b0042.json")
         with open(os.path.join(self.w1, "w1-b0042.webp"), "rb") as fh:
             icon = fh.read()
         d = core.load_json_strict(path)
         entry = d["update_settlements"][-1]
+        entry["prev_bundle_sha256"] = prev_bundle or self.base_bundle
         entry["bundle_sha256"] = claims.bundle_sha256(d, icon)
         entry["update_signature"] = claims.sign_update(d["slot_id"], entry["tx_hash"],
                                                         entry["bundle_sha256"], key)
@@ -724,7 +819,9 @@ class UpdateLedgerTests(unittest.TestCase):
         """Verify the slot as it stands in self.td against `prev`, the slot as main has it: the
         tree an applied request leaves, which is what an update request is verified as."""
         scope = verifier.make_scope("update", slots={"w1-b0042"}, updates_={TX_FEE1}) if touched else None
-        base = {"ledger/w1/w1-b0042.json": core.render(prev).encode()}
+        with open(os.path.join(self.w1, "w1-b0042.webp"), "rb") as fh:
+            icon = fh.read()  # every test block carries the same committed icon
+        base = {"ledger/w1/w1-b0042.json": core.render(prev).encode(), "ledger/w1/w1-b0042.webp": icon}
         with mock.patch.object(verifier, "changed_entries", return_value=None), \
                 mock.patch.object(verifier, "_git_show", side_effect=base.get), \
                 mock.patch.object(core, "unsold_slots_in", return_value=0 if sold_out else 9990):

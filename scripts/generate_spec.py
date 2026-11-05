@@ -116,6 +116,17 @@ INVARIANTS = [
         "enforced_by": "scripts/verifier.py::verify_update_signatures + scripts/claims.py::verify_update_signature",
     },
     {
+        "id": "update-base-version",
+        "summary": "Every update_settlements entry appended by a paid change names prev_bundle_sha256, the "
+                   "bundle hash of the block it was authored against (the slot's committed dossier + icon "
+                   "before the change). It must equal the bundle hash of the block as the base branch has "
+                   "it: an update written against an older version (another change landed first) is "
+                   "rejected, and the apply bot leaves such a request pending, never silently merging it "
+                   "over the newer block. prev_bundle_sha256 is part of the new bundle, so the owner's "
+                   "update_signature binds it. Optional on legacy entries, required on every new one.",
+        "enforced_by": "scripts/verifier.py::verify_update_precondition + scripts/apply_updates.py::try_request",
+    },
+    {
         "id": "transfer-release",
         "summary": "Transfers open only once every public block is sold (state.json transfers_open, "
                    "unsold_slots == 0); until then a transfer is rejected, so no cheap block can be passed "

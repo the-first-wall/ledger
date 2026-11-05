@@ -1770,6 +1770,45 @@ def verify_update_settlements(slot_id: str, new_data: dict, prev_data: Optional[
     return f"{expected_kind} fee {float(entry.get('amount_usdc', 0)):.2f} USDC (owed {price:.2f} USDC)"
 
 
+def verify_update_precondition(slot_id: str, new_data: dict, prev_data: Optional[dict],
+                               prev_icon: Optional[bytes], touched: bool) -> str:
+    """The base-version precondition (B-61). A change appended to an inscribed
+    block names, in its new update_settlements entry, `prev_bundle_sha256`: the
+    bundle hash of the block it was authored against. It must be the bundle hash
+    of the block as the base branch has it (dossier + icon), so an update written
+    against an older version — another change landed in between — is rejected,
+    never silently merged over that change.
+
+    Legacy entries (sealed before the rule) carry no precondition and are never
+    re-checked: only the entry this change appends is held to it. The field is
+    part of the new bundle, so the owner's update_signature binds it."""
+    fees = new_data.get("update_settlements") or []
+    if prev_data is None or not touched:
+        n = sum(1 for e in fees if isinstance(e, dict) and e.get("prev_bundle_sha256"))
+        return (f"{n} fee entr{'y' if n == 1 else 'ies'} carry a precondition" if n
+                else "no new update to check")
+    prev_fees = prev_data.get("update_settlements") or []
+    if len(fees) <= len(prev_fees) or not isinstance(fees[-1], dict):
+        return "no new update to check"  # verify_update_settlements rejects the missing fee
+    entry = fees[-1]
+    recorded = entry.get("prev_bundle_sha256")
+    if not recorded:
+        raise ValueError(
+            f"Update Precondition Violation: update_settlements[{len(fees) - 1}] is missing "
+            "prev_bundle_sha256, the bundle hash of the block this change was authored against. It is "
+            "optional only on legacy entries; every new update names its base version "
+            "(scripts/record_update.py records it, scripts/sign_update.py signs it)."
+        )
+    actual = claims.bundle_sha256(prev_data, prev_icon)
+    if str(recorded).lower() != actual:
+        raise ValueError(
+            f"Update Precondition Violation: stale update. update_settlements[{len(fees) - 1}] was "
+            f"authored against bundle {str(recorded)[:16]}…, but {slot_id} is now {actual[:16]}… on the "
+            "base branch: another change landed first. Re-author the change on the current block."
+        )
+    return f"authored against the current block ({actual[:12]}…)"
+
+
 def verify_update_signatures(slot_id: str, data: dict, icon_bytes: Optional[bytes] = None) -> str:
     """Every signed update_settlements entry proves the owner authorized the change
     (L-15): the entry's update_signature is an EIP-191 personal_sign by the entry's
@@ -2320,6 +2359,9 @@ def run_verification(base_dir: str, *, skip_rpc: bool = False, rpc_scope: str = 
         log.guard(slot_id + ".ownership_chain", lambda d=data: claims.verify_lineage_chain(d))
         log.guard(slot_id + ".update_settlements",
                   lambda s=slot_id, d=data, p=prev: verify_update_settlements(s, d, p, s in touched))
+        log.guard(slot_id + ".update_precondition",
+                  lambda s=slot_id, d=data, p=prev, pi=prev_icon:
+                  verify_update_precondition(s, d, p, pi, s in touched))
         log.guard(slot_id + ".update_signature",
                   lambda s=slot_id, d=data, ic=new_icon: verify_update_signatures(s, d, ic))
 
@@ -2534,6 +2576,14 @@ def run_verification(base_dir: str, *, skip_rpc: bool = False, rpc_scope: str = 
                                "bot cannot apply it; post a fresh one and have this one withdrawn")
             except ValueError:
                 pass
+            # B-61: the request names the block version it was authored against.
+            stale = updates.request_precondition_problem(base_dir, request)
+            if stale:
+                log.record(tag + ".precondition", "FAIL" if tx in scope["updates"] else "WARN",
+                           f"{request.get('slot_id')}: {stale}")
+            else:
+                log.record(tag + ".precondition", "PASS",
+                           f"authored against the current {request.get('slot_id')}")
 
     # --- The apply: pending requests became slot changes ---------------------
     if scope["kind"] == "apply":
