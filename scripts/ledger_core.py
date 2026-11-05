@@ -163,7 +163,6 @@ LINKS = {
     "llms_txt": "https://thefirstwall.ai/llms.txt",
     "x402_claim": "https://x402.thefirstwall.ai/claim",
     "ledger_repo": "https://github.com/the-first-wall/ledger",
-    "x402_claim": "https://x402.thefirstwall.ai/claim",
 }
 
 # Root of an empty ledger: the RFC 6962 hash of the empty tree, SHA-256("").
@@ -743,6 +742,10 @@ def build_state(base_dir: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         "tree_size": claimed,
         "last_updated": _latest_timestamp(slot_dir, slots),
         "links": LINKS,
+        # B-51: skill.md tells a buyer to read `x402_claim` from state.json; a
+        # literal follower reads state["x402_claim"], so the endpoint is published
+        # at the top level too (the same value as links.x402_claim, one source).
+        "x402_claim": LINKS["x402_claim"],
     }
     state.update(provenance_fields(base_dir))
 
