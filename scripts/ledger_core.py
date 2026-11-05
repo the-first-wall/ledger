@@ -632,6 +632,94 @@ def _latest_timestamp(slot_dir: str, slots: List[str]) -> str:
     return max(stamps) if stamps else ""
 
 
+# --- Liveness and dated absence (P-64) -----------------------------------------
+# An inscription may declare how often it is witnessed (`expected_heartbeat`, a
+# whole number of days, ISO 8601 "P<n>D") and carries `last_witnessed_at`, which
+# must be one of its own attested timestamps (timestamp_verified or a paid
+# update's `at`). Absence is never claimed: `absent_since` is DERIVED by rule
+# from those two fields and the ledger's own clock, so it is reproducible on any
+# machine and no claimant can set, clear or back-date it.
+
+HEARTBEAT_RE = re.compile(r"^P([1-9][0-9]{0,3})D$")
+LIVENESS_RULE = ("absent_after = last_witnessed_at + expected_heartbeat; absent_since = absent_after "
+                 "if absent_after <= as_of else null; as_of = the ledger's own clock (the later of "
+                 "state.last_updated and the latest anchor's anchored_at). absent_since is derived, "
+                 "never set by a claim or an update.")
+
+
+def _parse_ts(value: str):
+    from datetime import datetime, timezone
+    dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        raise ValueError(f"timestamp has no timezone: {value!r}")
+    return dt.astimezone(timezone.utc)
+
+
+def _fmt_ts(dt) -> str:
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def heartbeat_days(value: Any) -> int:
+    """The heartbeat period in days. ValueError on anything but P<n>D (1-9999)."""
+    m = HEARTBEAT_RE.match(value) if isinstance(value, str) else None
+    if not m:
+        raise ValueError(f"expected_heartbeat must be an ISO 8601 whole-day duration P<n>D, got {value!r}")
+    return int(m.group(1))
+
+
+def ledger_clock(base_dir: str) -> str:
+    """The ledger's own 'now': the later of the newest content timestamp
+    (state.last_updated) and the latest anchor's anchored_at. Deterministic given
+    the committed files, so derived absence never depends on a wall clock."""
+    slot_dir = ledger_w1_dir(base_dir)
+    stamps = [_latest_timestamp(slot_dir, list_slot_files(slot_dir))]
+    path = os.path.join(base_dir, "ledger", "anchors.json")
+    if os.path.exists(path):
+        try:
+            anchors = load_json_strict(path)
+        except ValueError:
+            anchors = []
+        if isinstance(anchors, list) and anchors and isinstance(anchors[-1], dict):
+            stamps.append(str(anchors[-1].get("anchored_at") or ""))
+    stamps = [t for t in stamps if t]
+    return _fmt_ts(max(_parse_ts(t) for t in stamps)) if stamps else ""
+
+
+def liveness(dossier: Dict[str, Any], as_of: str) -> Optional[Dict[str, Any]]:
+    """The derived liveness of one inscription, or None when it declares no
+    heartbeat. Pure function of the two dossier fields and `as_of`."""
+    hb = dossier.get("expected_heartbeat")
+    seen = dossier.get("last_witnessed_at")
+    if hb is None and seen is None:
+        return None
+    from datetime import timedelta
+    after = _parse_ts(seen) + timedelta(days=heartbeat_days(hb))
+    absent = bool(as_of) and after <= _parse_ts(as_of)
+    return {
+        "expected_heartbeat": hb,
+        "last_witnessed_at": seen,
+        "absent_after": _fmt_ts(after),
+        "absent_since": _fmt_ts(after) if absent else None,
+        "as_of": as_of or None,
+        "rule": LIVENESS_RULE,
+    }
+
+
+def attested_timestamps(dossier: Dict[str, Any]) -> List[str]:
+    """The timestamps the dossier itself attests by a signed or paid event: the
+    inscription's timestamp_verified and every update fee's `at`. A witness
+    (last_witnessed_at) must be one of them; it cannot simply be typed in."""
+    out: List[str] = []
+    ts = dossier.get("timestamp_verified")
+    if isinstance(ts, str) and ts:
+        out.append(ts)
+    for fee in dossier.get("update_settlements") or []:
+        at = fee.get("at") if isinstance(fee, dict) else None
+        if isinstance(at, str) and at:
+            out.append(at)
+    return out
+
+
 # --- Published provenance: the skill and the discovery documents -------------
 # skill.md and the discovery/ documents are served to agents and directories;
 # state.json publishes their SHA-256 so a swapped copy is detectable. The values

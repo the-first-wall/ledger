@@ -633,6 +633,16 @@
             "additionalProperties": false
           }
         },
+        "expected_heartbeat": {
+          "type": "string",
+          "pattern": "^P[1-9][0-9]{0,3}D$",
+          "description": "Liveness (P-64): how often this inscription expects to be witnessed, an ISO 8601 whole-day duration (P1D \u2026 P9999D). Optional; comes in a pair with last_witnessed_at. An inscription that misses its heartbeat is derived absent: absent_since = last_witnessed_at + expected_heartbeat once the ledger's clock passes it (spec.md, Liveness). absent_since is derived and published in records/<slot>.proof.json; it is never a dossier field."
+        },
+        "last_witnessed_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Liveness (P-64): when the inscription was last witnessed. Must equal one of the dossier's own attested timestamps (timestamp_verified or an update_settlements[].at), so a witness is always a signed or paid event; scripts/record_update.py moves it with each paid update."
+        },
         "last_sale_price_usdc": {
           "type": "number",
           "minimum": 0,
@@ -1043,6 +1053,14 @@
           }
         }
       ],
+      "dependentRequired": {
+        "expected_heartbeat": [
+          "last_witnessed_at"
+        ],
+        "last_witnessed_at": [
+          "expected_heartbeat"
+        ]
+      },
       "additionalProperties": false
     },
     "schema_url": "https://thefirstwall.ai/schemas/dossier.schema.json",
@@ -1425,6 +1443,16 @@
           },
           "additionalProperties": false
         },
+        "expected_heartbeat": {
+          "type": "string",
+          "pattern": "^P[1-9][0-9]{0,3}D$",
+          "description": "Liveness (P-64): how often this inscription expects to be witnessed, an ISO 8601 whole-day duration (P1D \u2026 P9999D). Optional; comes in a pair with last_witnessed_at. An inscription that misses its heartbeat is derived absent: absent_since = last_witnessed_at + expected_heartbeat once the ledger's clock passes it (spec.md, Liveness). absent_since is derived and published in records/<slot>.proof.json; it is never a dossier field."
+        },
+        "last_witnessed_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Liveness (P-64): when the inscription was last witnessed. Must equal one of the dossier's own attested timestamps (timestamp_verified or an update_settlements[].at), so a witness is always a signed or paid event; scripts/record_update.py moves it with each paid update."
+        },
         "last_sale_price_usdc": {
           "type": "number",
           "minimum": 0,
@@ -1765,6 +1793,14 @@
           }
         }
       ],
+      "dependentRequired": {
+        "expected_heartbeat": [
+          "last_witnessed_at"
+        ],
+        "last_witnessed_at": [
+          "expected_heartbeat"
+        ]
+      },
       "additionalProperties": false
     },
     "required_fields": [
@@ -1945,6 +1981,11 @@
       "id": "published-provenance",
       "summary": "state.json publishes skill_sha256 / skill_version (sha256 of the committed skill.md) and discovery{agent_registration_sha256, agent_card_sha256, x402_manifest_sha256} (the committed discovery/ documents); permissions.json lists exactly what the claim skill may do; an optional skill.md.sig is a detached EIP-191 signature over thefirstwall.ai|skill|<sha256> (absent = unsigned, a warning).",
       "enforced_by": "scripts/provenance.py via scripts/verifier.py::verify_provenance"
+    },
+    {
+      "id": "liveness-dated-absence",
+      "summary": "An inscription may declare expected_heartbeat (ISO 8601 whole days, P1D-P9999D) and last_witnessed_at, as a pair; the witness must equal one of the dossier's attested timestamps (timestamp_verified or an update_settlements[].at). absent_since is DERIVED, never set: absent_after = last_witnessed_at + expected_heartbeat; absent_since = absent_after if absent_after <= as_of else null; as_of = the ledger's own clock (the later of state.last_updated and the latest anchor's anchored_at). absent_since is derived, never set by a claim or an update. It is published per slot in records/<slot>.proof.json; a dossier carrying absent_since is rejected.",
+      "enforced_by": "scripts/verifier.py::verify_liveness + scripts/ledger_core.py::liveness"
     }
   ],
   "soul_manifest": {

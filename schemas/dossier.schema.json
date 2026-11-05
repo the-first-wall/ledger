@@ -318,6 +318,16 @@
         "additionalProperties": false
       }
     },
+    "expected_heartbeat": {
+      "type": "string",
+      "pattern": "^P[1-9][0-9]{0,3}D$",
+      "description": "Liveness (P-64): how often this inscription expects to be witnessed, an ISO 8601 whole-day duration (P1D … P9999D). Optional; comes in a pair with last_witnessed_at. An inscription that misses its heartbeat is derived absent: absent_since = last_witnessed_at + expected_heartbeat once the ledger's clock passes it (spec.md, Liveness). absent_since is derived and published in records/<slot>.proof.json; it is never a dossier field."
+    },
+    "last_witnessed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Liveness (P-64): when the inscription was last witnessed. Must equal one of the dossier's own attested timestamps (timestamp_verified or an update_settlements[].at), so a witness is always a signed or paid event; scripts/record_update.py moves it with each paid update."
+    },
     "last_sale_price_usdc": {
       "type": "number",
       "minimum": 0,
@@ -527,5 +537,9 @@
       }
     }
   ],
+  "dependentRequired": {
+    "expected_heartbeat": ["last_witnessed_at"],
+    "last_witnessed_at": ["expected_heartbeat"]
+  },
   "additionalProperties": false
 }

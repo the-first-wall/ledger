@@ -626,6 +626,8 @@ def verify_ownership_lineage(slot_id: str, new_data: dict, ledger_dir: str,
 LIVING_FIELDS = {
     "agent_urls", "status", "retirement", "covenants",
     "high_res_crest_url", "timestamp_verified",
+    # Liveness (P-64): the owner may change the cadence, and every witnessed event moves the witness.
+    "expected_heartbeat", "last_witnessed_at",
 }
 # Arrays that may only grow; existing entries are byte-for-byte preserved.
 APPEND_ONLY_FIELDS = {"supersessions", "ownership_lineage", "boundary_events", "update_settlements", "evidence"}
@@ -1809,6 +1811,51 @@ def verify_update_precondition(slot_id: str, new_data: dict, prev_data: Optional
     return f"authored against the current block ({actual[:12]}…)"
 
 
+DERIVED_LIVENESS_FIELDS = ("absent_since", "absent_after")
+
+
+def verify_liveness(slot_id: str, data: dict, as_of: str) -> str:
+    """Liveness (P-64). An inscription may declare expected_heartbeat (P<n>D) and
+    last_witnessed_at, as a pair. The witness must be one of the dossier's own
+    attested timestamps (timestamp_verified or an update fee's `at`): a signed or
+    paid event, never a typed-in date. absent_since is DERIVED by rule from the two
+    and the ledger's clock (ledger_core.liveness) and is never set by a claim or
+    an update: a dossier that carries it is rejected."""
+    present = [f for f in DERIVED_LIVENESS_FIELDS if f in data]
+    if present:
+        raise ValueError(
+            f"Liveness Violation: {present} is derived by rule (last_witnessed_at + expected_heartbeat "
+            "against the ledger's clock) and published in records/<slot>.proof.json; a dossier never "
+            "sets it."
+        )
+    hb, seen = data.get("expected_heartbeat"), data.get("last_witnessed_at")
+    if hb is None and seen is None:
+        return "no heartbeat declared"
+    if hb is None or seen is None:
+        raise ValueError("Liveness Violation: expected_heartbeat and last_witnessed_at come as a pair.")
+    try:
+        core.heartbeat_days(hb)
+        witnessed = core._parse_ts(seen)
+    except ValueError as e:
+        raise ValueError(f"Liveness Violation: {e}")
+    attested = []
+    for t in core.attested_timestamps(data):
+        try:
+            attested.append(core._parse_ts(t))
+        except ValueError:
+            continue
+    if witnessed not in attested:
+        raise ValueError(
+            f"Liveness Violation: last_witnessed_at {seen} is not one of the dossier's attested "
+            "timestamps (timestamp_verified or an update_settlements[].at); a witness is a signed or "
+            "paid event."
+        )
+    live = core.liveness(data, as_of)
+    if live["absent_since"]:
+        return f"heartbeat {hb}: ABSENT since {live['absent_since']} (last witnessed {seen}, as of {as_of})"
+    return f"heartbeat {hb}: present (last witnessed {seen}; absent after {live['absent_after']})"
+
+
 def verify_update_signatures(slot_id: str, data: dict, icon_bytes: Optional[bytes] = None) -> str:
     """Every signed update_settlements entry proves the owner authorized the change
     (L-15): the entry's update_signature is an EIP-191 personal_sign by the entry's
@@ -2288,6 +2335,7 @@ def run_verification(base_dir: str, *, skip_rpc: bool = False, rpc_scope: str = 
         except Exception as e:  # noqa: BLE001
             log.record("rpc.head_block", "FAIL", f"could not read chain head: {e}")
 
+    ledger_as_of = core.ledger_clock(base_dir)
     for s_file in slots:
         if only_slots is not None and s_file[:-5] not in only_slots:
             continue
@@ -2365,6 +2413,8 @@ def run_verification(base_dir: str, *, skip_rpc: bool = False, rpc_scope: str = 
         log.guard(slot_id + ".update_signature",
                   lambda s=slot_id, d=data, ic=new_icon: verify_update_signatures(s, d, ic))
 
+        log.guard(slot_id + ".liveness",
+                  lambda s=slot_id, d=data: verify_liveness(s, d, ledger_as_of))
         log.guard(slot_id + ".icon_structure",
                   lambda p=icon_path: verify_icon(p))
 

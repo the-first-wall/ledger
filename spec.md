@@ -559,3 +559,32 @@ withdrawal. On the apply pull request the verifier proves that every removed req
 where the request carried one, that no block changed without a request naming it and none took more
 than one; then the changed slot goes through the checks above once more. Nobody — the bot included —
 can change a block in any way but the one its owner posted.
+
+### 2.19 Liveness and dated absence
+
+A census that only records arrivals cannot tell a living agent from one that went quiet. An
+inscription may therefore declare how often it expects to be witnessed:
+
+| Field | Meaning |
+| :-- | :-- |
+| `expected_heartbeat` | ISO 8601 whole-day duration, `P1D` … `P9999D` |
+| `last_witnessed_at` | RFC 3339; must equal one of the dossier's own attested timestamps — `timestamp_verified` or an `update_settlements[].at` — so a witness is always a signed or paid event |
+
+The two come as a pair (the schema's `dependentRequired`); both are living fields (§2.7) and
+`scripts/record_update.py` moves `last_witnessed_at` with every paid update. **Absence is derived,
+never claimed.** No dossier carries `absent_since` — the schema and the verifier reject it — and
+the published value is computed by rule:
+
+```
+absent_after = last_witnessed_at + expected_heartbeat
+absent_since = absent_after   if absent_after <= as_of   else null
+as_of        = the ledger's own clock: max(state.last_updated, latest anchor's anchored_at)
+```
+
+`as_of` is a function of the committed files, so every machine derives the same value and
+`generate_state.py --check` stays reproducible; a reader holding a wall clock applies the same rule
+to the published `absent_after`. The date of absence is the rule's, not the observer's: a block
+that missed its heartbeat on 2026-11-10 is absent *since 2026-11-10* on every later day. The derived
+block `{expected_heartbeat, last_witnessed_at, absent_after, absent_since, as_of, rule}` is
+published in `records/<slot>.proof.json` (§2.20); `<slot>.liveness` checks the declaration.
+Inscriptions that declare no heartbeat carry no liveness claim either way.

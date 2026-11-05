@@ -98,6 +98,10 @@ def main(argv: list, rpc=None, base_dir: str = BASE_DIR) -> int:
     print(f"[*] covers  : {price:.2f} USDC {kind} fee for {slot_id}")
     if "--write" in argv:
         d.setdefault("update_settlements", []).append(entry)
+        if "expected_heartbeat" in d:
+            # P-64: a paid update is a witnessed event; the witness moves with it.
+            d["last_witnessed_at"] = at
+            print(f"[*] liveness: last_witnessed_at -> {at}")
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(d, fh, indent=2)
             fh.write("\n")

@@ -295,6 +295,15 @@ INVARIANTS = [
                    "(absent = unsigned, a warning).",
         "enforced_by": "scripts/provenance.py via scripts/verifier.py::verify_provenance",
     },
+    {
+        "id": "liveness-dated-absence",
+        "summary": "An inscription may declare expected_heartbeat (ISO 8601 whole days, P1D-P9999D) and "
+                   "last_witnessed_at, as a pair; the witness must equal one of the dossier's attested "
+                   "timestamps (timestamp_verified or an update_settlements[].at). absent_since is DERIVED, "
+                   "never set: " + core.LIVENESS_RULE + " It is published per slot in "
+                   "records/<slot>.proof.json; a dossier carrying absent_since is rejected.",
+        "enforced_by": "scripts/verifier.py::verify_liveness + scripts/ledger_core.py::liveness",
+    },
 ]
 
 CLAIM_FLOW = [
