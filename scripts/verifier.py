@@ -71,6 +71,7 @@ import content_safety as safety  # noqa: E402
 import claims  # noqa: E402
 import provenance  # noqa: E402
 import records  # noqa: E402
+import absence_certificate as absence  # noqa: E402
 import updates  # noqa: E402
 
 BASE_CHAIN_ID = 8453
@@ -2655,6 +2656,15 @@ def run_verification(base_dir: str, *, skip_rpc: bool = False, rpc_scope: str = 
               "state.json, index.json & settlements.json match derivation")
     log.guard("state.last_updated", lambda: verify_last_updated(base_dir))
     log.guard("records.proofs", lambda: records.verify_records(base_dir))
+    # Absence certificates (signed negative proofs): current ones must hold at the
+    # current root; one for an older anchored root is a dated, superseded statement.
+    for rel in absence.certificate_files(base_dir):
+        tag = "absent." + os.path.basename(rel)[:-5]
+        try:
+            status, detail = absence.verify_certificate(base_dir, rel)
+            log.record(tag, "PASS" if status == "current" else "WARN", detail)
+        except (ValueError, OSError) as e:
+            log.record(tag, "FAIL", str(e))
     verify_provenance(base_dir, log)
 
     # Identity: the ERC-8004 holder and tokenURI are mutable, so check the chain.

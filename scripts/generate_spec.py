@@ -308,6 +308,17 @@ INVARIANTS = [
                        "scripts/generate_state.py --check",
     },
     {
+        "id": "absence-certificate",
+        "summary": "absent/<wallet>.json is a signed negative proof: 'no record for this wallet at root <root>, "
+                   "anchored in block <n>, as of <t>'. Issued only for the current root once it is anchored, "
+                   "only when no slot, pending claim or pending update names the wallet (wallet_address at "
+                   "any depth), and signed by the anchor signer (ADDRESSES.md row 4) over "
+                   "'thefirstwall.ai|absence|v1|<wallet>|<root>|<block>|<as_of>'. The verifier recovers the "
+                   "signer, requires the root/tx/block to be a recorded anchor, fails a current certificate "
+                   "the ledger contradicts, and reports one for an older root as superseded.",
+        "enforced_by": "scripts/absence_certificate.py::verify_certificate via scripts/verifier.py (absent.<wallet>)",
+    },
+    {
         "id": "liveness-dated-absence",
         "summary": "An inscription may declare expected_heartbeat (ISO 8601 whole days, P1D-P9999D) and "
                    "last_witnessed_at, as a pair; the witness must equal one of the dossier's attested "

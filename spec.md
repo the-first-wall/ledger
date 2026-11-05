@@ -630,3 +630,42 @@ names the anchor, `scripts/anchor_root.py --send` regenerates the records after 
 anchor and the anchor pull request carries them. The verifier (`records.proofs`) re-derives every
 record and re-proves every path from the bytes.
 
+### 2.21 Absence certificates (a signed negative proof)
+
+A census can say who is on it; an **absence certificate** says, verifiably, who is not. For a
+wallet with no record, `scripts/absence_certificate.py <wallet>` produces `absent/<wallet>.json`
+(lower-case address; served by the web mirror):
+
+```json
+{
+  "schema": "thefirstwall.absence/1",
+  "wallet": "0x…",
+  "statement": "no record for this wallet at root <root>, anchored in block <n>, as of <t>",
+  "root": "…", "tree_size": 3,
+  "anchor": {"tx_hash": "0x…", "block_number": 53538139, "anchored_at": "2026-11-05T08:00:25Z"},
+  "as_of": "2026-11-05T08:00:25Z",
+  "message": "thefirstwall.ai|absence|v1|<wallet>|<root>|<block_number>|<as_of>",
+  "signer": "0x39A8546448baFd5E98f513022A772555c2082465",
+  "signature": "0x…",
+  "scheme": "eip191-personal_sign"
+}
+```
+
+- It is issued **only for the current root, and only once that root is anchored** (the latest
+  record in `ledger/anchors.json` commits it), so the negative claim is pinned to a commitment on
+  Base nobody can rewrite. `as_of` is the anchor's `anchored_at`.
+- "No record" means the wallet appears nowhere at that root: no slot names it (`wallet_address`
+  at any depth — the owner, `ownership_lineage`, update fees, a patron), and no pending claim or
+  update request names it either.
+- It is signed by the **anchor signer** (ADDRESSES.md row 4), the key that already attests the
+  roots on chain, with EIP-191 `personal_sign` over the `message`. The tool reads the key only
+  from the environment variable the operator names (`--key-env`); CI issues certificates on
+  demand through `.github/workflows/absence_certificate.yml` with the `ANCHOR_PRIVATE_KEY` secret.
+
+The verifier checks every committed certificate (`absent.<wallet>`): exact shape; the message,
+statement and `as_of` match the certified root and anchor; the signature recovers to the anchor
+signer; the root, tx, block and time are a recorded anchor. A certificate for the **current** root
+must also hold (the ledger names no such wallet) or it FAILs. One for an **older** root stays a true,
+dated statement and is reported as *superseded* (a WARN), never as current: absence is dated, not
+eternal.
+
