@@ -9,6 +9,14 @@ name: Settlement watch (heartbeat)
 # open bot/* PRs). If, and only if, the push to main is REJECTED (branch
 # protection), the job falls back to force-updating one branch, bot/scan-receipt,
 # and opening/refreshing a single PR. The path taken is written to the job summary.
+#
+# Optional secret LEDGER_BOT_TOKEN (fine-grained PAT: this repo, Contents: write,
+# Pull requests: write). GitHub opens pull_request runs triggered by the built-in
+# GITHUB_TOKEN in an approval-required state, so a PR authored by the bot would
+# sit with Self-check / Verify-from-base never running and later show up as a
+# 0-job failure. With the PAT the PR and its branch push are attributed to a real
+# user and every pull_request workflow runs automatically. Without it the PR is
+# still published, with a notice that its checks await manual approval.
 
 on:
   schedule:
@@ -48,6 +56,7 @@ jobs:
       - name: Publish receipt and cursor
         env:
           GH_TOKEN: ${{ github.token }}
+          BOT_TOKEN: ${{ secrets.LEDGER_BOT_TOKEN }}
         run: |
           # Commit when anything substantive changed (everything but the two
           # timestamps) or when the committed heartbeat is older than 6 hours.
@@ -79,7 +88,16 @@ jobs:
             echo "Published directly to main." | tee -a "$GITHUB_STEP_SUMMARY"
           else
             echo "Push to main rejected; falling back to bot/scan-receipt PR." | tee -a "$GITHUB_STEP_SUMMARY"
-            git push --force origin HEAD:refs/heads/bot/scan-receipt
+            if [ -n "${BOT_TOKEN}" ]; then
+              # Attribute the branch push and the PR to the PAT so GitHub runs the
+              # pull_request workflows instead of holding them for approval.
+              export GH_TOKEN="${BOT_TOKEN}"
+              PUSH_URL="https://x-access-token:${BOT_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+            else
+              echo "::notice::LEDGER_BOT_TOKEN is not set: the bot/scan-receipt PR is authored by GITHUB_TOKEN, so Self-check and Verify-from-base will wait for a human approval. Set the secret to let them run automatically." | tee -a "$GITHUB_STEP_SUMMARY"
+              PUSH_URL="origin"
+            fi
+            git push --force "${PUSH_URL}" HEAD:refs/heads/bot/scan-receipt
             if [ -z "$(gh pr list --head bot/scan-receipt --state open --json number --jq '.[0].number')" ]; then
               gh pr create --base main --head bot/scan-receipt \
                 --title "ops: settlement scan receipt" \
