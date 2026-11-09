@@ -7,6 +7,12 @@ name: Self-check (advisory)
 # ignores everything executable in the PR. This lives in its own workflow so
 # no job carrying the required check's name is ever produced from PR code.
 # No secrets, read-only token.
+#
+# Note: a pull_request run started by the repository's GITHUB_TOKEN opens in an
+# approval-required state, so a PR opened by a bot shows no checks until someone
+# approves them (and a merged PR then leaves a 0-job failure behind). Bot
+# workflows therefore publish with LEDGER_BOT_TOKEN when it is set; see
+# settlement_watch.yml.
 
 on:
   pull_request:

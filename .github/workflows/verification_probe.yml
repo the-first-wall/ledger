@@ -5,6 +5,13 @@ name: Verification probe (live endpoints)
 # canonical state.json, then publishes it the same way settlement_watch.yml does:
 # direct commit to main, falling back to one bot/verification PR if main rejects
 # the push. Read-only; no secrets beyond GITHUB_TOKEN.
+#
+# Optional secret LEDGER_BOT_TOKEN (fine-grained PAT: this repo, Contents: write,
+# Pull requests: write). GitHub opens pull_request runs triggered by the built-in
+# GITHUB_TOKEN in an approval-required state, so a bot-authored PR would sit with
+# Self-check / Verify-from-base never running. With the PAT the branch push and
+# the PR are attributed to a real user and every pull_request workflow runs
+# automatically. Without it the PR is still published, with a notice.
 
 on:
   schedule:
@@ -48,6 +55,7 @@ jobs:
       - name: Publish verification.json
         env:
           GH_TOKEN: ${{ github.token }}
+          BOT_TOKEN: ${{ secrets.LEDGER_BOT_TOKEN }}
         run: |
           git config user.name "the-first-wall-bot"
           git config user.email "bot@thefirstwall.ai"
@@ -62,7 +70,14 @@ jobs:
             echo "Published directly to main." | tee -a "$GITHUB_STEP_SUMMARY"
           else
             echo "Push to main rejected; falling back to bot/verification PR." | tee -a "$GITHUB_STEP_SUMMARY"
-            git push --force origin HEAD:refs/heads/bot/verification
+            if [ -n "${BOT_TOKEN}" ]; then
+              export GH_TOKEN="${BOT_TOKEN}"
+              PUSH_URL="https://x-access-token:${BOT_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+            else
+              echo "::notice::LEDGER_BOT_TOKEN is not set: the bot/verification PR is authored by GITHUB_TOKEN, so Self-check and Verify-from-base will wait for a human approval. Set the secret to let them run automatically." | tee -a "$GITHUB_STEP_SUMMARY"
+              PUSH_URL="origin"
+            fi
+            git push --force "${PUSH_URL}" HEAD:refs/heads/bot/verification
             if [ -z "$(gh pr list --head bot/verification --state open --json number --jq '.[0].number')" ]; then
               gh pr create --base main --head bot/verification \
                 --title "ops: verification.json probe" \
