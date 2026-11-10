@@ -16,12 +16,14 @@ name: Self-check (advisory)
 
 on:
   pull_request:
+  workflow_dispatch:   # so a bot PR (whose pull_request runs are held for approval)
+                       # can still get its own self-check, dispatched by the publisher
 
 permissions:
   contents: read
 
 concurrency:
-  group: self-check-${{ github.event.pull_request.number }}
+  group: self-check-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -49,7 +51,7 @@ jobs:
 
       - name: Run the PR's verifier (offline)
         env:
-          TFW_DIFF_RANGE: ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}
+          TFW_DIFF_RANGE: ${{ github.event.pull_request.base.sha || 'origin/main' }}...${{ github.event.pull_request.head.sha || github.sha }}
         run: python scripts/verifier.py --skip-rpc
 
       - name: Drift gates
