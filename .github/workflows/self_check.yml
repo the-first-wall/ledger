@@ -11,8 +11,10 @@ name: Self-check (advisory)
 # Note: a pull_request run started by the repository's GITHUB_TOKEN opens in an
 # approval-required state, so a PR opened by a bot shows no checks until someone
 # approves them (and a merged PR then leaves a 0-job failure behind). Bot
-# workflows therefore publish with LEDGER_BOT_TOKEN when it is set; see
-# settlement_watch.yml.
+# workflows therefore publish with LEDGER_BOT_TOKEN when it is set; when it is
+# not, the publisher dispatches the checks on the branch AND clears this held run
+# (approve it so it reports the real result, else cancel it) so a merged green bot
+# PR does not keep a red advisory X. See settlement_watch.yml, verification_probe.yml.
 
 on:
   pull_request:
