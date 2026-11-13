@@ -16,7 +16,7 @@ makes "Merkle commit proof" resolve to real bytes:
      files: {dossier, icon}, verify,
      liveness: {...} | null,                                   <- P-64, derived
      receipt: {payer, amount_usdc, tx_hash, block_number, confirmations,
-               bundle_sha256, anchor_tx, proof_path}}
+               last_confirmed_at, bundle_sha256, anchor_tx, proof_path}}
 
 The proof verifies against nothing but the slot's two committed files:
 `python scripts/merkle_proof.py --verify records/<slot>.proof.json
@@ -32,6 +32,9 @@ The receipt is ONE object per record, every field derived from committed bytes:
 * confirmations — confirmations of the settlement at the anchoring block
                   (anchor block - settlement block + 1): a lower bound that only
                   grows; null while the current root is not yet anchored;
+* last_confirmed_at — the newest instant the dossier itself attests (the
+                  inscription's timestamp_verified, a settled update fee's `at`,
+                  or a witnessed heartbeat); null when it attests none (P-54);
 * bundle_sha256 — the bundle hash of the committed dossier + icon (spec.md §2.14);
 * anchor_tx     — the Base transaction that anchored the current root
                   (ledger/anchors.json), null while unanchored;
@@ -45,6 +48,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -56,7 +60,27 @@ RECORDS_DIR = "records"
 PROOF_SCHEMA = "thefirstwall.proof/1"
 RECORD_FILE_RE = re.compile(r"^records/(w1-b(?:\d{4}|10000))\.proof\.json$")
 RECEIPT_KEYS = ("payer", "amount_usdc", "tx_hash", "block_number", "confirmations",
-                "bundle_sha256", "anchor_tx", "proof_path")
+                "last_confirmed_at", "bundle_sha256", "anchor_tx", "proof_path")
+
+
+def _instant(iso: Any) -> Optional[datetime]:
+    try:
+        return datetime.fromisoformat(str(iso).replace("Z", "+00:00")).astimezone(timezone.utc)
+    except Exception:  # noqa: BLE001 — an unparseable stamp is no instant, never a crash
+        return None
+
+
+def last_confirmed_at(dossier: Dict[str, Any]) -> Optional[str]:
+    """The newest instant the dossier itself attests (P-54): the inscription's
+    timestamp_verified, every settled update fee's `at` (core.attested_timestamps), and the last
+    witnessed heartbeat. A pure function of the committed bytes — never the clock — and null when
+    the dossier attests none, so an ACTIVE record is never an undated placeholder."""
+    stamps = list(core.attested_timestamps(dossier))
+    seen = dossier.get("last_witnessed_at")
+    if isinstance(seen, str) and seen:
+        stamps.append(seen)
+    found = [(dt, s) for dt, s in ((_instant(s), s) for s in stamps) if dt]
+    return max(found, key=lambda pair: pair[0])[1] if found else None
 
 
 def proof_rel(slot_id: str) -> str:
@@ -96,6 +120,7 @@ def receipt(dossier: Dict[str, Any], icon: Optional[bytes], anchor: Optional[Dic
         "tx_hash": dossier.get("base_tx_hash"),
         "block_number": block,
         "confirmations": confirmations,
+        "last_confirmed_at": last_confirmed_at(dossier),
         "bundle_sha256": claims.bundle_sha256(dossier, icon),
         "anchor_tx": anchor.get("tx_hash") if anchor else None,
         "proof_path": proof_rel(slot_id),

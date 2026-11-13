@@ -23,6 +23,7 @@
     "tx_hash": "0x6b88193d2409124393ddfcd8b9daa50deee9a053d6c6f03389e87b5104a6294c",
     "block_number": 52344732,
     "confirmations": 1193408,
+    "last_confirmed_at": "2026-10-20T19:17:10Z",
     "bundle_sha256": "1cdb2194c0a3f063b2ad03dfcd0e7315142875acaa6483619af495cf26ecb4ce",
     "anchor_tx": "0x3963796ec0e87d5ea671a0ea045d74594aceb8cc4250c6957a194347ce03c95f",
     "proof_path": "records/w1-b0002.proof.json"
