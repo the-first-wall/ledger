@@ -183,7 +183,8 @@ class OfflineBuild(unittest.TestCase):
             return base(url)
 
         doc = ver.build(REPO, probe=True, fetch=fetch, clock=CLOCK, commit="y" * 40)
-        self.assertEqual(sorted(calls), sorted(u for _, u in ver.SERVICES))
+        expected = sorted([u for _, u in ver.SERVICES] + [u for _, u in ver.published_artifacts(REPO)])
+        self.assertEqual(sorted(calls), expected)
         probes = {c["id"]: c for c in doc["checks"] if c["id"].startswith("http_probe.")}
         self.assertEqual({c["status"] for c in probes.values()}, {"pass"})
         self.assertEqual(probes["http_probe.x402_manifest"]["evidence"]["semantics"], "pass")
@@ -244,6 +245,38 @@ class OfflineBuild(unittest.TestCase):
         doc = ver.build(REPO, probe=True, fetch=lambda u: {"error": "URLError: down"}, clock=CLOCK, commit="z" * 40)
         self.assertEqual({s["status"] for s in doc["services"]}, {"down"})
         self.assertIn("down", [c for c in doc["checks"] if c["id"].startswith("http_probe.")][0]["evidence"]["error"])
+
+    def test_b102_scope_labels_repo_checks_vs_published_probes(self):
+        """`records.proofs` runs against the repository; a reader must not read it as
+        "the site serves the proof" — the scope says which."""
+        with mock.patch("urllib.request.urlopen", _no_network):
+            doc = ver.build(REPO, clock=CLOCK, commit="x" * 40)
+        by_id = {c["id"]: c for c in doc["checks"]}
+        self.assertEqual(by_id["records.proofs"]["evidence"]["scope"], ver.SCOPE_REPO)
+        self.assertEqual(by_id["permissions.manifest"]["evidence"]["scope"], ver.SCOPE_REPO)
+        probed = ver.build(REPO, probe=True, fetch=self._manifest_fetch(self._served_manifest()),
+                           clock=CLOCK, commit="y" * 40)
+        probes = [c for c in probed["checks"] if c["id"].startswith("http_probe.")]
+        self.assertTrue(probes)
+        self.assertTrue(all(c["evidence"]["scope"] == ver.SCOPE_PUBLISHED for c in probes))
+
+    def test_b102_every_committed_artefact_is_probed_and_a_404_fails(self):
+        published = ver.published_artifacts(REPO)
+        self.assertTrue(any(pid.startswith("proof.") for pid, _ in published))
+        self.assertTrue(any(pid.startswith("absence.") for pid, _ in published))
+
+        base = self._manifest_fetch(self._served_manifest())
+
+        def fetch(url):
+            if "/records/" in url or "/absent/" in url:
+                return {"http_status": 404, "bytes": 9379, "sha256": "b" * 64, "body": b"<html>404</html>"}
+            return base(url)
+
+        doc = ver.build(REPO, probe=True, fetch=fetch, clock=CLOCK, commit="y" * 40)
+        bad = [c for c in doc["checks"] if c["id"].startswith("http_probe.published.") and c["status"] == "fail"]
+        self.assertTrue(bad, "a 404 on a published proof/absence must fail")
+        self.assertEqual(bad[0]["evidence"]["expected_status"], 200)
+        self.assertTrue(any(s["status"] == "down" for s in doc["services"]))
 
 
 class CheckMode(Sandbox):

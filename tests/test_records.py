@@ -67,6 +67,26 @@ class CommittedRecords(unittest.TestCase):
                 self.assertEqual(r["confirmations"], anchor["block_number"] - r["block_number"] + 1)
                 self.assertGreater(r["confirmations"], 0)
 
+    def test_receipt_carries_last_confirmed_at_from_the_attested_bytes(self):
+        """P-54: the receipt dates the record from its own attested instants, never the clock."""
+        for slot_id in self.slots:
+            rec = _load(records.proof_rel(slot_id))
+            d = core.load_json_strict(os.path.join(REPO, "ledger", "w1", f"{slot_id}.json"))
+            self.assertEqual(rec["receipt"]["last_confirmed_at"], records.last_confirmed_at(d))
+            stamps = list(core.attested_timestamps(d))
+            self.assertIn(rec["receipt"]["last_confirmed_at"], stamps)
+            self.assertEqual(rec["receipt"]["last_confirmed_at"], max(stamps))
+
+    def test_last_confirmed_at_precedence_and_none(self):
+        f = records.last_confirmed_at
+        self.assertIsNone(f({}))
+        self.assertEqual(f({"timestamp_verified": "2026-01-01T00:00:00Z"}), "2026-01-01T00:00:00Z")
+        self.assertEqual(f({"timestamp_verified": "2026-01-01T00:00:00Z",
+                            "update_settlements": [{"at": "2026-02-02T00:00:00Z"}]}), "2026-02-02T00:00:00Z")
+        self.assertEqual(f({"update_settlements": [{"at": "2026-02-02T00:00:00Z"}],
+                            "last_witnessed_at": "2026-03-03T00:00:00Z"}), "2026-03-03T00:00:00Z")
+        self.assertIsNone(f({"update_settlements": "junk", "last_witnessed_at": 5}))
+
     def test_the_verifier_checks_them(self):
         self.assertIn("verify to the current root", records.verify_records(REPO))
 

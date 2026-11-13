@@ -65,6 +65,16 @@ import provenance  # noqa: E402
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 VERIFICATION_FILE = "verification.json"
 SCHEMA = "thefirstwall.verification/1"
+SITE = "https://thefirstwall.ai"
+
+# Where a check's evidence lives (B-102). A `repo` check inspects the committed ledger and can
+# be green while the canonical origin 404s the very artefact it names; a `published` check
+# fetches the origin and cannot go green unless the URL answers. The scope is recorded in the
+# check's evidence so `records.proofs = pass` is never mistaken for "the site serves the proof".
+SCOPE_REPO = "repo"
+SCOPE_PUBLISHED = "published"
+PROOF_REL_RE = re.compile(r"records/w1-b(?:\d{4}|10000)\.proof\.json$")
+ABSENCE_REL_RE = re.compile(r"absent/0x[0-9a-f]{40}\.json$")
 SERVICES = (
     ("x402_manifest", "https://x402.thefirstwall.ai/.well-known/x402"),
     ("ledger_state", "https://thefirstwall.ai/state.json"),
@@ -173,6 +183,31 @@ def invalidates_on(cid: str, status: str = "pass", evidence: Optional[Dict[str, 
     return "ledger_commit_changes"
 
 
+def _slot_ids(base_dir: str) -> List[str]:
+    slot_dir = core.ledger_w1_dir(base_dir)
+    if not os.path.isdir(slot_dir):
+        return []
+    return [f[:-5] for f in core.list_slot_files(slot_dir) if f.endswith(".json")]
+
+
+def published_artifacts(base_dir: str) -> List[tuple]:
+    """[(id, url)] for every artefact the ledger commits for the site to serve: one per claimed
+    slot's inclusion proof (`records/<slot>.proof.json`) and one per absence certificate
+    (`absent/<wallet>.json`). Read from the ledger, so the probe set follows it."""
+    out: List[tuple] = []
+    for slot_id in sorted(_slot_ids(base_dir)):
+        rel = "records/%s.proof.json" % slot_id
+        if PROOF_REL_RE.fullmatch(rel):
+            out.append(("proof.%s" % slot_id, "%s/%s" % (SITE, rel)))
+    absent_dir = os.path.join(base_dir, "absent")
+    if os.path.isdir(absent_dir):
+        for name in sorted(os.listdir(absent_dir)):
+            rel = "absent/%s" % name
+            if ABSENCE_REL_RE.fullmatch(rel):
+                out.append(("absence.%s" % name[:-5], "%s/%s" % (SITE, rel)))
+    return out
+
+
 def verifier_checks(base_dir: str, observed_at: str) -> List[Dict[str, Any]]:
     """Every check the offline verifier runs, published under its own id (B-54).
     Run in-process with --skip-rpc semantics and the scope of an infrastructure
@@ -195,7 +230,7 @@ def verifier_checks(base_dir: str, observed_at: str) -> List[Dict[str, Any]]:
         if status == "warn" and "skipped (--skip-rpc)" in detail:
             status = "skipped"
         out.append({"id": cid, "status": status, "observed_at": observed_at,
-                    "evidence": {"detail": detail, "source": VERIFIER_SOURCE},
+                    "evidence": {"detail": detail, "source": VERIFIER_SOURCE, "scope": SCOPE_REPO},
                     "invalidates_on": invalidates_on(cid, status)})
     return out
 
@@ -362,7 +397,7 @@ def _x402_claim_semantics(doc: Any, state: Dict[str, Any]) -> List[str]:
 
 
 def probe_checks(state: Dict[str, Any], fetch: Fetch, clock: Callable[[], str],
-                 authored: Optional[Dict[str, Any]] = None):
+                 authored: Optional[Dict[str, Any]] = None, published: Optional[List[tuple]] = None):
     """Live probes: real GETs. Returns (checks, services).
 
     `authored` is the committed `discovery/x402.json`: the served x402 manifest is
@@ -377,7 +412,8 @@ def probe_checks(state: Dict[str, Any], fetch: Fetch, clock: Callable[[], str],
         want = EXPECTED_STATUS.get(sid, 200)
         ok = status_code == want and "error" not in r
         evidence: Dict[str, Any] = {"url": url, "method": "GET", "http_status": status_code,
-                                    "expected_status": want, "bytes": r.get("bytes")}
+                                    "expected_status": want, "bytes": r.get("bytes"),
+                                    "scope": SCOPE_PUBLISHED}
         if r.get("sha256"):
             # The bytes actually served. For the runtime-built manifest this is NOT a
             # pin — the semantics check below is what can fail for a real reason.
@@ -417,6 +453,21 @@ def probe_checks(state: Dict[str, Any], fetch: Fetch, clock: Callable[[], str],
         checks.append({"id": f"http_probe.{sid}", "status": "pass" if ok else "fail", "observed_at": at,
                        "evidence": evidence, "invalidates_on": invalidates_on(f"http_probe.{sid}", "pass", evidence)})
         services.append({"url": url, "status": "up" if ok else "down", "checked_at": at})
+    # B-102: probe every artefact the ledger commits for the site to serve, so a published
+    # "pass" (records.proofs) can only stand while the served URL really answers.
+    for pid, url in (published or []):
+        at = clock()
+        r = fetch(url)
+        status_code = r.get("http_status")
+        ok = status_code == 200 and "error" not in r
+        evidence = {"url": url, "method": "GET", "http_status": status_code, "expected_status": 200,
+                    "bytes": r.get("bytes"), "scope": SCOPE_PUBLISHED}
+        if r.get("error"):
+            evidence["error"] = r["error"]
+        checks.append({"id": f"http_probe.published.{pid}", "status": "pass" if ok else "fail",
+                       "observed_at": at, "evidence": evidence,
+                       "invalidates_on": invalidates_on(f"http_probe.published.{pid}", "pass", evidence)})
+        services.append({"url": url, "status": "up" if ok else "down", "checked_at": at})
     return checks, services
 
 
@@ -428,12 +479,15 @@ def build(base_dir: str = BASE_DIR, *, probe: bool = False, fetch: Fetch = http_
     generated_at = clock()
     checks = file_checks(base_dir, state, generated_at)
     checks += verifier_checks(base_dir, generated_at)
+    published = published_artifacts(base_dir)
     if probe:
         authored = _load(base_dir, core.DISCOVERY_FILES["x402_manifest_sha256"])
-        pchecks, services = probe_checks(state, fetch, clock, authored)
+        pchecks, services = probe_checks(state, fetch, clock, authored, published)
         checks += pchecks
     else:
-        services = [{"url": url, "status": "unprobed", "checked_at": None} for _, url in SERVICES]
+        services = [{"url": url, "status": "unprobed", "checked_at": None}
+                    for _sid, url in SERVICES] + [{"url": url, "status": "unprobed", "checked_at": None}
+                                                  for _pid, url in published]
     return {
         "schema": SCHEMA,
         "generated_at": generated_at,

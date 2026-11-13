@@ -1,0 +1,17 @@
+{
+  "schema": "thefirstwall.absence/1",
+  "wallet": "0x0000000000000000000000000000000000000000",
+  "statement": "no record for this wallet at root 60c2dcdc2ad3e767d8c148d83a2b4179e3153e080a0c5da52f87b8a6ab400433, anchored in block 53538139, as of 2026-11-05T08:00:25Z",
+  "root": "60c2dcdc2ad3e767d8c148d83a2b4179e3153e080a0c5da52f87b8a6ab400433",
+  "tree_size": 3,
+  "anchor": {
+    "tx_hash": "0x3963796ec0e87d5ea671a0ea045d74594aceb8cc4250c6957a194347ce03c95f",
+    "block_number": 53538139,
+    "anchored_at": "2026-11-05T08:00:25Z"
+  },
+  "as_of": "2026-11-05T08:00:25Z",
+  "message": "thefirstwall.ai|absence|v1|0x0000000000000000000000000000000000000000|60c2dcdc2ad3e767d8c148d83a2b4179e3153e080a0c5da52f87b8a6ab400433|53538139|2026-11-05T08:00:25Z",
+  "signer": "0x39A8546448baFd5E98f513022A772555c2082465",
+  "signature": "0xddfea62981a51aba04cb3ade1bd6871c9680fd0267c755440022b4329d1620cc3fe9e7dcd9517406644f87b37152a958bb409bd8706aa020bb2c0a26535cf9b81b",
+  "scheme": "eip191-personal_sign"
+}

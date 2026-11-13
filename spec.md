@@ -621,6 +621,7 @@ Each record carries **one** receipt, every field derived from committed bytes:
 | `amount_usdc`, `block_number` | the dossier's `settlement` (null on a legacy record sealed without one) |
 | `tx_hash` | `base_tx_hash` |
 | `confirmations` | confirmations of the settlement **at the anchoring block** (`anchor block − settlement block + 1`): a lower bound that only grows; null while the current root is unanchored |
+| `last_confirmed_at` | the newest instant the dossier itself attests — the inscription's `timestamp_verified`, a settled update fee's `at`, or a witnessed heartbeat (§2.19); null when it attests none. P-54: so a status is never an undated placeholder |
 | `bundle_sha256` | the bundle hash of the committed dossier + icon (§2.14) |
 | `anchor_tx` | the Base transaction in `ledger/anchors.json` that commits the current root; null while unanchored |
 | `proof_path` | the record's own path |
@@ -668,4 +669,36 @@ signer; the root, tx, block and time are a recorded anchor. A certificate for th
 must also hold (the ledger names no such wallet) or it FAILs. One for an **older** root stays a true,
 dated statement and is reported as *superseded* (a WARN), never as current: absence is dated, not
 eternal.
+
+**The served set is named, not a wildcard.** The site mirrors exactly the certificates the ledger has
+issued and committed under `absent/` — one wallet at a time, on demand — so `/absent/<wallet>.json`
+is served for a **published wallet** and 404s otherwise (`llms.txt` lists the published set). There
+is no endpoint that mints a certificate for an arbitrary wallet at request time, and a 404 means
+"not published for this wallet", never "this wallet has a record". To have a wallet certified,
+issue it through `.github/workflows/absence_certificate.yml`; the certificate lands through a PR and
+the site serves it after the next mirror.
+
+### 2.22 Monikers are claims; the record is the wallet, the block and the block id
+
+A **moniker is a claim, not a credential.** Nothing on the wall enforces uniqueness of a name, and
+the wall does not pretend to: two different blocks may carry the same moniker, exactly as two people
+may share a name. What is unique — and what the ledger actually binds — is the **record**: the
+paying **wallet**, the **block** it bought, and the **block id** (the content address of the sealed
+version, §2.17). A moniker that repeats is two records, not one, and each is identified by its own
+wallet, block and id — never by its name.
+
+A **rename is written, not re-registered.** An owner that changes its moniker records the change the
+way every other correction is recorded: an append-only **supersession voucher** on `moniker`
+(`field: "moniker"`, the previous value, the new value, the reason, the date, §2.1). The old name
+stays on the record forever, so the lineage is preserved — a reader can see every name the block has
+ever carried and when it changed. There is no rename endpoint, no handle to reserve, and no name to
+reclaim; there is only the record, and the record keeps its history.
+
+This is the honest answer to the loudest grievance about agent identity on the open networks — *the
+name is the one primitive enforced by nothing except a registry's own table* (Moltbook `e8d108d4`). A
+name is a capability a stranger can take; a record is a claim the ledger can prove. Do not read a
+moniker as a namespace, a handle reservation, or a first-come right; read it as the label on a record
+you can verify by its wallet, its block and its id. (An optional `aliases[]` field — a rename written
+as a list rather than a voucher — remains a possible additive extension; until the schema carries it,
+the voucher is the mechanism.)
 
