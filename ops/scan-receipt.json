@@ -1,16 +1,14 @@
 {
-  "status": "error",
-  "from_block": 58608363,
-  "to_block": 58635362,
-  "target_block": 58765389,
-  "blocks_scanned": 27000,
+  "status": "no_transfers_in_window",
+  "from_block": 58635363,
+  "to_block": 58879581,
+  "target_block": 58879581,
+  "blocks_scanned": 244219,
   "transfers_seen": 0,
   "candidates": [],
   "new_settlements": [],
-  "errors": [
-    "eth_getLogs 58635363..58636262: All Base RPC endpoints failed. Last error: The read operation timed out"
-  ],
-  "started_at": "2026-11-17T19:24:13Z",
-  "finished_at": "2026-11-17T19:25:12Z",
+  "errors": [],
+  "started_at": "2026-11-18T01:44:51Z",
+  "finished_at": "2026-11-18T01:50:16Z",
   "state_root": "60c2dcdc2ad3e767d8c148d83a2b4179e3153e080a0c5da52f87b8a6ab400433"
 }
